@@ -1,0 +1,91 @@
+// TrendCutFlow — Prisma schema
+// Database: PostgreSQL (Supabase)
+// Run `prisma generate` to regenerate the client after changes.
+// Run `prisma migrate dev` to apply migrations when ready.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Plan {
+  FREE
+  CREATOR
+  PRO
+}
+
+enum VideoStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  currentPlan  Plan     @default(FREE)
+  totalCredits Int      @default(1)
+  creditsUsed  Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  videoSources VideoSource[]
+  integrations Integration[]
+
+  @@map("users")
+}
+
+model VideoSource {
+  id        String      @id @default(uuid())
+  userId    String
+  title     String
+  sourceUrl String
+  status    VideoStatus @default(PENDING)
+  duration  Int         // seconds
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repurposedClips RepurposedClip[]
+
+  @@index([userId])
+  @@map("video_sources")
+}
+
+model RepurposedClip {
+  id             String   @id @default(uuid())
+  videoSourceId  String
+  startTime      Float
+  endTime        Float
+  clipStorageUrl String
+  transcriptJson Json
+  aiTitle        String
+  aiDescription  String
+  isQueued       Boolean  @default(false)
+
+  videoSource VideoSource @relation(fields: [videoSourceId], references: [id], onDelete: Cascade)
+
+  @@index([videoSourceId])
+  @@map("repurposed_clips")
+}
+
+model Integration {
+  id                    String @id @default(uuid())
+  userId                String
+  platform              String // e.g. 'youtube', 'instagram', 'tiktok'
+  encryptedRefreshToken String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@index([userId])
+  @@map("integrations")
+}
