@@ -14,21 +14,18 @@ export default function App() {
   const { state } = app;
   const auth = useAuth();
 
-  // Sync auth user identity into the app store whenever auth changes.
   useEffect(() => {
     app.setAuthUser(auth.user);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.user]);
 
   useEffect(() => {
     app.closeAccountDropdown();
-  }, [state.screen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.screen]);
 
-  // Show full-screen auth gate when not authenticated (and not still loading).
+  // Show full-screen auth gate
   if (!auth.isLoading && !auth.isAuthenticated) {
     return (
       <>
-        {/* Blurred dashboard silhouette behind auth overlay */}
         <div className="min-h-screen bg-[#0B0F17] text-white font-sans select-none pointer-events-none">
           <div className="filter blur-md opacity-30 saturate-50">
             <Header
@@ -56,13 +53,14 @@ export default function App() {
               title: `Welcome, ${name.split(' ')[0]}!`,
               message: 'Your workspace is ready. Drop a video to get started.',
             });
+            app.setScreen('intake');
           }}
         />
       </>
     );
   }
 
-  // Loading spinner while Supabase session hydrates
+  // Loading spinner
   if (auth.isLoading) {
     return (
       <div className="min-h-screen bg-[#0B0F17] flex items-center justify-center">
@@ -84,46 +82,10 @@ export default function App() {
         onNavigateHome={() => app.setScreen('intake')}
         onLogout={auth.logout}
       />
-
-      {state.screen === 'intake' && (
-        <IntakeScreen
-          state={state}
-          onGenerate={app.runPipeline}
-          onSetUrl={app.setInputUrl}
-          onSetDragging={app.setIsDragging}
-          onSetFile={app.setUploadedFile}
-          onOpenUpgrade={app.openUpgradeModal}
-        />
-      )}
-
-      {state.screen === 'processing' && (
-        <ProcessingScreen
-          pipeline={state.pipeline}
-          pipelineError={state.pipelineError}
-        />
-      )}
-
-      {state.screen === 'editor' && (
-        <EditorScreen
-          state={state}
-          onSetClip={app.setActiveClipIndex}
-          onSetPreset={app.setSubtitlePreset}
-          onSetActiveWord={app.setActiveWordIndex}
-          onAddToQueue={app.addToPublishQueue}
-          onRemoveFromQueue={app.removeFromPublishQueue}
-          onUpdateTitle={app.updateMetadataTitle}
-        />
-      )}
-
-      {state.isUpgradeModalOpen && (
-        <UpgradeModal
-          currentPlan={state.user.plan}
-          onClose={app.closeUpgradeModal}
-          onSelectPlan={app.selectPlan}
-          onPurchasePlan={app.purchasePlan}
-        />
-      )}
-
+      {state.screen === 'intake' && <IntakeScreen state={state} onGenerate={app.runPipeline} onSetUrl={app.setInputUrl} onSetDragging={app.setIsDragging} onSetFile={app.setUploadedFile} onOpenUpgrade={app.openUpgradeModal} />}
+      {state.screen === 'processing' && <ProcessingScreen pipeline={state.pipeline} pipelineError={state.pipelineError} />}
+      {state.screen === 'editor' && <EditorScreen state={state} onSetClip={app.setActiveClipIndex} onSetPreset={app.setSubtitlePreset} onSetActiveWord={app.setActiveWordIndex} onAddToQueue={app.addToPublishQueue} onRemoveFromQueue={app.removeFromPublishQueue} onUpdateTitle={app.updateMetadataTitle} />}
+      {state.isUpgradeModalOpen && <UpgradeModal currentPlan={state.user.plan} onClose={app.closeUpgradeModal} onSelectPlan={app.selectPlan} onPurchasePlan={app.purchasePlan} />}
       <ToastStack toasts={state.toasts} onDismiss={app.dismissToast} />
     </div>
   );
