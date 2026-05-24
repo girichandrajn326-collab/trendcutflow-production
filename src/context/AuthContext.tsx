@@ -21,6 +21,7 @@ export interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<{ error: string | null }>;
   signup: (name: string, email: string, password: string) => Promise<{ error: string | null }>;
   logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error: string | null }>;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -42,7 +43,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoading: true,
   });
 
-  // Hydrate from existing Supabase session on mount, then listen for changes.
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       hydrateFromSession(session);
@@ -71,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       const msg = error.message.toLowerCase();
-      if (msg.includes('invalid login') || msg.includes('credentials')) {
+      if (msg.includes('invalid login') || msg.includes('credentials') || msg.includes('invalid')) {
         return { error: 'Incorrect email or password. Please try again.' };
       }
       return { error: error.message };
@@ -91,14 +91,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (error) {
-      if (error.message.toLowerCase().includes('already registered')) {
+      const msg = error.message.toLowerCase();
+      if (msg.includes('already registered') || msg.includes('already exists') || msg.includes('unique')) {
         return { error: 'An account with this email already exists. Please sign in instead.' };
       }
       return { error: error.message };
     }
 
+    // Create the public user profile row
     if (data.user) {
-      await supabase.from('users').insert({
+      const { error: insertError } = await supabase.from('users').insert({
         id: data.user.id,
         email,
         name,
@@ -106,6 +108,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         total_credits: 1,
         credits_used: 0,
       });
+      // Non-fatal: profile row may fail if already inserted by a trigger
+      if (insertError) {
+        console.warn('User profile insert warning:', insertError.message);
+      }
     }
 
     return { error: null };
@@ -116,8 +122,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthState({ user: null, isAuthenticated: false, isLoading: false });
   }, []);
 
+  const resetPassword = useCallback(async (email: string): Promise<{ error: string | null }> => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}`,
+    });
+    if (error) return { error: error.message };
+    return { error: null };
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ ...authState, login, signup, logout }}>
+    <AuthContext.Provider value={{ ...authState, login, signup, logout, resetPassword }}>
       {children}
     </AuthContext.Provider>
   );

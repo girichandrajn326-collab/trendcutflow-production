@@ -6,7 +6,14 @@ import {
   Youtube, Instagram, Ghost, ChevronUp, CheckCircle2,
 } from 'lucide-react';
 import type { AppState, SubtitlePreset, TranscriptWord, QueueEntry, QueuePlatform, QueueInterval } from '../store/appStore';
-import { getStyleSeedVariation } from '../lib/ffmpegClient';
+import type { CSSProperties } from 'react';
+
+function getStyleSeedVariation(seed: number): CSSProperties {
+  return {
+    letterSpacing: `${(seed - 1) * 0.02}em`,
+    fontSize: `${seed * 100}%`,
+  };
+}
 import { calculateSchedule, formatScheduledTime, formatScheduledShort } from '../lib/publishQueue';
 import { trimVideoClip } from '../lib/videoProcessor';
 
@@ -100,7 +107,7 @@ export default function EditorScreen({
         if (cancelled) { URL.revokeObjectURL(blobUrl); return; }
         setClipBlobUrls(prev => ({ ...prev, [clip.id]: blobUrl }));
       })
-      .catch(() => { /* silently fall back to thumbnail */ })
+      .catch(() => { /* fall back to thumbnail or source URL */ })
       .finally(() => { if (!cancelled) setTrimming(false); });
 
     return () => { cancelled = true; };
@@ -219,7 +226,7 @@ export default function EditorScreen({
                 {/* Notch */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-16 h-5 bg-slate-700 rounded-b-2xl z-10" />
 
-                {/* Background: trimmed blob video if available, else thumbnail */}
+                {/* Background: trimmed blob > source URL at timestamp > Pexels thumbnail */}
                 {clipBlobUrls[clip.id] ? (
                   <video
                     src={clipBlobUrls[clip.id]}
@@ -228,6 +235,13 @@ export default function EditorScreen({
                     loop
                     muted
                     playsInline
+                  />
+                ) : clip.sourceVideoUrl ? (
+                  <SourceVideoPreview
+                    src={clip.sourceVideoUrl}
+                    startTime={clip.startTime}
+                    endTime={clip.endTime}
+                    isPlaying={isPlaying}
                   />
                 ) : (
                   <img
@@ -543,6 +557,61 @@ export default function EditorScreen({
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── SourceVideoPreview ───────────────────────────────────────────────────────
+// Shows a URL-sourced video seeked to the clip's start time.
+
+function SourceVideoPreview({
+  src, startTime, endTime, isPlaying,
+}: {
+  src: string;
+  startTime: number;
+  endTime: number;
+  isPlaying: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = startTime;
+  }, [startTime, src]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (isPlaying) {
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }, [isPlaying]);
+
+  // Loop within the clip segment
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    function handleTimeUpdate() {
+      if (v && v.currentTime >= endTime) {
+        v.currentTime = startTime;
+        if (isPlaying) v.play().catch(() => {});
+      }
+    }
+    v.addEventListener('timeupdate', handleTimeUpdate);
+    return () => v.removeEventListener('timeupdate', handleTimeUpdate);
+  }, [startTime, endTime, isPlaying]);
+
+  return (
+    <video
+      ref={videoRef}
+      src={src}
+      className="absolute inset-0 w-full h-full object-cover"
+      muted
+      playsInline
+      crossOrigin="anonymous"
+    />
   );
 }
 
