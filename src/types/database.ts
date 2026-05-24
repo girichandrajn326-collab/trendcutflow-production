@@ -120,6 +120,7 @@ export function dbUserToAccount(row: DbUser): UserAccount {
     name: row.name,
     plan: planMap[row.current_plan],
     videosProcessed: row.credits_used,
+    totalCredits: row.total_credits,
     avatarInitials: initials,
   };
 }

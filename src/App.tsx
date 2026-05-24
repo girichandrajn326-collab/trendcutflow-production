@@ -9,6 +9,7 @@ import ProcessingScreen from './screens/ProcessingScreen';
 import EditorScreen from './screens/EditorScreen';
 import AuthScreen from './screens/AuthScreen';
 import ResetPasswordScreen from './screens/ResetPasswordScreen';
+import HistoryScreen from './screens/HistoryScreen';
 
 // Detect Supabase password-reset redirect (hash contains type=recovery)
 function isPasswordResetFlow(): boolean {
@@ -60,6 +61,7 @@ export default function App() {
               onToggleAccountDropdown={() => {}}
               onCloseAccountDropdown={() => {}}
               onNavigateHome={() => {}}
+              onNavigateHistory={() => {}}
               onLogout={() => {}}
             />
             <div className="min-h-screen flex items-center justify-center pt-16">
@@ -94,6 +96,7 @@ export default function App() {
         onToggleAccountDropdown={app.toggleAccountDropdown}
         onCloseAccountDropdown={app.closeAccountDropdown}
         onNavigateHome={() => app.setScreen('intake')}
+        onNavigateHistory={() => app.setScreen('history')}
         onLogout={auth.logout}
       />
       {state.screen === 'intake' && (
@@ -108,6 +111,9 @@ export default function App() {
       )}
       {state.screen === 'processing' && (
         <ProcessingScreen pipeline={state.pipeline} pipelineError={state.pipelineError} />
+      )}
+      {state.screen === 'history' && (
+        <HistoryScreen user={state.user} />
       )}
       {state.screen === 'editor' && (
         <EditorScreen

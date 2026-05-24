@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { Zap, ChevronDown, User, LogOut, CreditCard, Settings, TrendingUp } from 'lucide-react';
+import { Zap, ChevronDown, User, LogOut, CreditCard, Settings, TrendingUp, Clock } from 'lucide-react';
 import type { AppState } from '../store/appStore';
 
 interface HeaderProps {
@@ -8,6 +8,7 @@ interface HeaderProps {
   onToggleAccountDropdown: () => void;
   onCloseAccountDropdown: () => void;
   onNavigateHome: () => void;
+  onNavigateHistory: () => void;
   onLogout: () => void;
 }
 
@@ -17,6 +18,7 @@ export default function Header({
   onToggleAccountDropdown,
   onCloseAccountDropdown,
   onNavigateHome,
+  onNavigateHistory,
   onLogout,
 }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -67,6 +69,15 @@ export default function Header({
 
         {/* Right side */}
         <div className="flex items-center gap-3">
+          {/* History button */}
+          <button
+            onClick={onNavigateHistory}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.07] hover:border-white/[0.14] text-slate-400 hover:text-white text-xs font-medium transition-all duration-200"
+          >
+            <Clock size={12} />
+            History
+          </button>
+
           {/* Upgrade button */}
           {user.plan !== 'pro' && (
             <button

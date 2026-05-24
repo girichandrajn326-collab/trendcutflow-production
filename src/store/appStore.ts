@@ -4,7 +4,7 @@ import { transcribeVideo, findViralClips, incrementCredit } from '../lib/ai';
 import type { AuthUser } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 
-export type AppScreen = 'intake' | 'processing' | 'editor';
+export type AppScreen = 'intake' | 'processing' | 'editor' | 'history';
 export type SubtitlePreset = 'hormozi' | 'minimalist' | 'cyberpunk';
 export type PlanTier = 'free' | 'creator' | 'pro';
 export type QueuePlatform = 'youtube_shorts' | 'instagram_reels' | 'snapchat_spotlight';
@@ -378,8 +378,9 @@ export function useAppState() {
       user: authUser ? buildUserFromAuth(authUser) : MOCK_USER,
     }));
 
-    // Sync real credit counts from DB when a user logs in
+    // Sync credits + plan + publish queue from DB when a user logs in
     if (authUser) {
+      // Credits / plan
       supabase
         .from('users')
         .select('current_plan, total_credits, credits_used')
@@ -397,6 +398,25 @@ export function useAppState() {
               videosProcessed: data.credits_used,
             },
           }));
+        });
+
+      // Publish queue — restore pending entries
+      supabase
+        .from('publish_queue')
+        .select('clip_id, clip_title, platform, interval_hours, scheduled_at')
+        .eq('user_id', authUser.id)
+        .eq('status', 'pending')
+        .then(({ data }) => {
+          if (!data || data.length === 0) return;
+          const entries: QueueEntry[] = data.map(row => ({
+            clipId: row.clip_id ?? '',
+            platform: row.platform as QueuePlatform,
+            intervalHours: row.interval_hours as QueueInterval,
+            scheduledAt: new Date(row.scheduled_at),
+          })).filter(e => e.clipId);
+          if (entries.length > 0) {
+            setState(s => ({ ...s, publishQueue: entries }));
+          }
         });
     }
   }, []);
@@ -475,6 +495,20 @@ export function useAppState() {
       user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] },
       isUpgradeModalOpen: false,
     }));
+    // Persist plan upgrade to DB (webhook also does this — belt-and-suspenders)
+    setState(s => {
+      if (s.user.id) {
+        const planDbMap: Record<PlanTier, string> = { free: 'FREE', creator: 'CREATOR', pro: 'PRO' };
+        supabase.from('users').update({
+          current_plan: planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
+          total_credits: PLAN_LIMITS[plan],
+          credits_used: 0,
+        }).eq('id', s.user.id).then(({ error }) => {
+          if (error) console.error('purchasePlan DB write failed:', error.message);
+        });
+      }
+      return s;
+    });
   }, []);
 
   // ── Account dropdown ───────────────────────────────────────────────────────
@@ -490,17 +524,40 @@ export function useAppState() {
   // ── Publish queue ──────────────────────────────────────────────────────────
 
   const addToPublishQueue = useCallback((entry: QueueEntry) => {
-    setState(s => ({
-      ...s,
-      publishQueue: [...s.publishQueue.filter(e => e.clipId !== entry.clipId), entry],
-    }));
+    setState(s => {
+      const next = [...s.publishQueue.filter(e => e.clipId !== entry.clipId), entry];
+      // Persist to DB — upsert by user_id + clip_id
+      if (s.user.id) {
+        const clip = s.clips.find(c => c.id === entry.clipId);
+        supabase.from('publish_queue').upsert({
+          user_id: s.user.id,
+          clip_id: entry.clipId,
+          clip_title: clip?.title ?? '',
+          platform: entry.platform,
+          interval_hours: entry.intervalHours,
+          scheduled_at: entry.scheduledAt.toISOString(),
+          status: 'pending',
+        }, { onConflict: 'user_id,clip_id' }).then(({ error }) => {
+          if (error) console.error('addToPublishQueue DB write failed:', error.message);
+        });
+      }
+      return { ...s, publishQueue: next };
+    });
   }, []);
 
   const removeFromPublishQueue = useCallback((clipId: string) => {
-    setState(s => ({
-      ...s,
-      publishQueue: s.publishQueue.filter(e => e.clipId !== clipId),
-    }));
+    setState(s => {
+      if (s.user.id) {
+        supabase.from('publish_queue')
+          .delete()
+          .eq('user_id', s.user.id)
+          .eq('clip_id', clipId)
+          .then(({ error }) => {
+            if (error) console.error('removeFromPublishQueue DB delete failed:', error.message);
+          });
+      }
+      return { ...s, publishQueue: s.publishQueue.filter(e => e.clipId !== clipId) };
+    });
   }, []);
 
   // ── Toasts ─────────────────────────────────────────────────────────────────
@@ -588,16 +645,47 @@ export function useAppState() {
       // Increment credit server-side (non-blocking)
       incrementCredit().catch(() => {});
 
-      setState(s => ({
-        ...s,
-        clips: newClips,
-        activeClipIndex: 0,
-        activeWordIndex: 0,
-        pipeline: setStepStatus(s.pipeline, 'metadata', 'done'),
-        screen: 'editor',
-        randomStyleSeed: generateRandomStyleSeed(),
-        user: { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
-      }));
+      setState(s => {
+        // Persist video_source + clips to DB (fire-and-forget)
+        if (s.user.id) {
+          (async () => {
+            const sourceTitle = typeof source === 'string' ? source : (source as File).name;
+            const { data: vsRow } = await supabase
+              .from('video_sources')
+              .insert({ user_id: s.user.id, title: sourceTitle, source_url: urlSource ?? '', status: 'COMPLETED', duration: 0 })
+              .select('id')
+              .maybeSingle();
+
+            if (vsRow) {
+              await supabase.from('repurposed_clips').insert(
+                newClips.map(c => ({
+                  video_source_id: vsRow.id,
+                  start_time: c.startTime,
+                  end_time: c.endTime,
+                  clip_storage_url: c.thumbnail,
+                  ai_title: c.title,
+                  ai_description: c.metadata.seoDescription,
+                  is_queued: false,
+                  metadata_json: c.metadata,
+                  source_video_url: urlSource ?? '',
+                  transcript_json: { words: c.transcript.map(w => ({ id: w.id, word: w.word, start_ms: w.startMs, end_ms: w.endMs })) },
+                }))
+              );
+            }
+          })().catch(err => console.error('DB persist clips failed:', err));
+        }
+
+        return {
+          ...s,
+          clips: newClips,
+          activeClipIndex: 0,
+          activeWordIndex: 0,
+          pipeline: setStepStatus(s.pipeline, 'metadata', 'done'),
+          screen: 'editor',
+          randomStyleSeed: generateRandomStyleSeed(),
+          user: { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
+        };
+      });
 
     } catch (err) {
       console.error('Pipeline failure:', err);
