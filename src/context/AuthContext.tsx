@@ -84,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: 'Please use a permanent business or personal email address to claim your free video credits.' };
     }
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: { data: { full_name: name } },
@@ -96,6 +96,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       return { error: error.message };
     }
+
+    if (data.user) {
+      await supabase.from('users').insert({
+        id: data.user.id,
+        email,
+        name,
+        current_plan: 'FREE',
+        total_credits: 1,
+        credits_used: 0,
+      });
+    }
+
     return { error: null };
   }, []);
 

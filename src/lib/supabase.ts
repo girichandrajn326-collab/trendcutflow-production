@@ -1,13 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from '../types/database';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-const FALLBACK_URL = 'https://placeholder.supabase.co';
-const FALLBACK_KEY = 'placeholder';
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY environment variables.');
+}
 
-export const supabase = createClient<Database>(
-  supabaseUrl || FALLBACK_URL,
-  supabaseAnonKey || FALLBACK_KEY,
-);
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
