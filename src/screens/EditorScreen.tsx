@@ -15,8 +15,11 @@ function getStyleSeedVariation(seed: number): CSSProperties {
     fontSize: `${seed * 100}%`,
   };
 }
-import { calculateSchedule, formatScheduledTime, formatScheduledShort } from '../lib/publishQueue';
+import { calculateSchedule, formatScheduledTime, formatScheduledShort, executePublish } from '../lib/publishQueue';
 import { trimVideoClip } from '../lib/videoProcessor';
+import { burnSubtitles } from '../lib/ffmpegClient';
+import { initiateYouTubeOAuth } from '../lib/oauthManager';
+import { supabase } from '../lib/supabase';
 
 interface EditorScreenProps {
   state: AppState;
@@ -62,6 +65,8 @@ export default function EditorScreen({
   const [clipBlobUrls, setClipBlobUrls]         = useState<Record<string, string>>({});
   const [trimming, setTrimming]                 = useState(false);
   const [exporting, setExporting]               = useState(false);
+  const [publishing, setPublishing]             = useState(false);
+  const [ytConnected, setYtConnected]           = useState<boolean | null>(null);
 
   // ── Scheduling UI state ──────────────────────────────────────────────────────
   const [schedDropOpen, setSchedDropOpen]       = useState(false);
@@ -94,6 +99,65 @@ export default function EditorScreen({
     setWordEdits({});
     setEditingWordIdx(null);
   }, [activeClipIndex, onSetActiveWord]);
+
+  // Check YouTube connection once on mount
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user?.id) { setYtConnected(false); return; }
+      supabase
+        .from('integrations')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .eq('platform', 'youtube')
+        .maybeSingle()
+        .then(({ data }) => setYtConnected(!!data));
+    });
+  }, []);
+
+  const handleConnectYouTube = useCallback(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user?.id) return;
+      initiateYouTubeOAuth(session.user.id);
+      // Listen for the popup to close and re-check
+      const check = setInterval(() => {
+        supabase
+          .from('integrations')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .eq('platform', 'youtube')
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data) { setYtConnected(true); clearInterval(check); }
+          });
+      }, 2000);
+      setTimeout(() => clearInterval(check), 120000);
+    });
+  }, []);
+
+  const handlePublishNow = useCallback(async () => {
+    if (!ytConnected) { handleConnectYouTube(); return; }
+    setPublishing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+      await executePublish({
+        id: crypto.randomUUID(),
+        clipId: clip.id,
+        userId: session.user.id,
+        title: clip.title,
+        scheduledAt: new Date(),
+        status: 'processing',
+        platform: 'youtube_shorts',
+        retryCount: 0,
+      });
+      alert('Published to YouTube Shorts!');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Publish failed: ${msg}`);
+    } finally {
+      setPublishing(false);
+    }
+  }, [clip, ytConnected, handleConnectYouTube]);
 
   // Trim current clip client-side when an uploaded file is available.
   // Runs once per clip id; skips if we already have a blob URL for it.
@@ -151,34 +215,46 @@ export default function EditorScreen({
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      // Use already-trimmed blob if available
-      const blobUrl = clipBlobUrls[clip.id];
-      if (blobUrl) {
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
-        a.click();
-        return;
+      const uploadedFile = state.uploadedFile;
+      const safeName = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
+
+      // Get or produce a trimmed blob
+      let blob: Blob | null = null;
+      let existingBlobUrl = clipBlobUrls[clip.id];
+
+      if (!existingBlobUrl && uploadedFile) {
+        existingBlobUrl = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
+        setClipBlobUrls(prev => ({ ...prev, [clip.id]: existingBlobUrl }));
       }
 
-      // Try to trim on-demand from uploaded file
-      const uploadedFile = state.uploadedFile;
-      if (uploadedFile) {
-        const url = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
-        setClipBlobUrls(prev => ({ ...prev, [clip.id]: url }));
+      if (existingBlobUrl) {
+        const res = await fetch(existingBlobUrl);
+        blob = await res.blob();
+      }
+
+      // Try to burn subtitles on top
+      if (blob) {
+        const burned = await burnSubtitles(blob, {
+          words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+          style: state.subtitlePreset,
+          styleSeed: state.randomStyleSeed,
+        });
+        if (burned) blob = burned;
+      }
+
+      if (blob) {
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
+        a.download = safeName;
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
         return;
       }
 
-      // No local video — open source URL in new tab as fallback
+      // Fallback: open source URL
       const src = clip.sourceVideoUrl;
-      if (src) {
-        window.open(src, '_blank', 'noopener');
-        return;
-      }
+      if (src) { window.open(src, '_blank', 'noopener'); return; }
 
       alert('No video source available for export. Please re-upload the original file.');
     } catch (err) {
@@ -187,7 +263,7 @@ export default function EditorScreen({
     } finally {
       setExporting(false);
     }
-  }, [clip, clipBlobUrls, state.uploadedFile]);
+  }, [clip, clipBlobUrls, state.uploadedFile, state.subtitlePreset, state.randomStyleSeed]);
 
   // ── Scrub-drag: click or drag across transcript updates active word ─────────
   const handleTranscriptPointerDown = useCallback((e: React.PointerEvent) => {
@@ -598,6 +674,9 @@ export default function EditorScreen({
             onRemoveFromQueue={onRemoveFromQueue}
             onExport={handleExport}
             exporting={exporting}
+            onPublishNow={handlePublishNow}
+            publishing={publishing}
+            ytConnected={ytConnected}
           />
         </div>
       </div>
@@ -938,6 +1017,9 @@ interface PublishQueueFooterProps {
   onRemoveFromQueue: (clipId: string) => void;
   onExport: () => void;
   exporting: boolean;
+  onPublishNow: () => void;
+  publishing: boolean;
+  ytConnected: boolean | null;
 }
 
 function PublishQueueFooter({
@@ -958,6 +1040,9 @@ function PublishQueueFooter({
   onRemoveFromQueue,
   onExport,
   exporting,
+  onPublishNow,
+  publishing,
+  ytConnected,
 }: PublishQueueFooterProps) {
   const isQueued     = publishQueue.some(e => e.clipId === activeClipId);
   const activeEntry  = publishQueue.find(e => e.clipId === activeClipId);
@@ -1114,6 +1199,21 @@ function PublishQueueFooter({
               )}
             </div>
           )}
+
+          {/* Publish Now to YouTube */}
+          <button
+            onClick={onPublishNow}
+            disabled={publishing}
+            title={ytConnected === false ? 'Connect YouTube first' : 'Publish to YouTube Shorts now'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600/80 text-white hover:bg-red-600 text-xs font-semibold transition-all hover:shadow-[0_0_12px_rgba(239,68,68,0.35)] border border-red-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {publishing
+              ? <><Loader2 size={12} className="animate-spin" />Publishing…</>
+              : ytConnected === false
+              ? <><Youtube size={12} />Connect YT</>
+              : <><Youtube size={12} />Publish Now</>
+            }
+          </button>
 
           {/* Export / Download */}
           <button

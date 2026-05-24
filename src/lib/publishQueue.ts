@@ -65,17 +65,86 @@ export function formatScheduledShort(date: Date): string {
   return `+${diffDays}d ${timeStr}`;
 }
 
-// Stub: Add clip to publish queue (stores in Supabase)
+import { supabase } from './supabase';
+
+// Add clip to publish queue in Supabase
 export async function addClipToQueue(
-  _clipId: string,
-  _userId: string,
-  _scheduledAt: Date,
-  _platform: QueuedClip['platform'],
+  clipId: string,
+  userId: string,
+  scheduledAt: Date,
+  platform: QueuedClip['platform'],
 ): Promise<void> {
-  console.log('[PublishQueue] addClipToQueue stub called');
+  const { error } = await supabase.from('publish_queue').upsert({
+    user_id: userId,
+    clip_id: clipId,
+    platform,
+    scheduled_at: scheduledAt.toISOString(),
+    status: 'pending',
+  }, { onConflict: 'user_id,clip_id' });
+
+  if (error) throw new Error(`addClipToQueue failed: ${error.message}`);
 }
 
-// Stub: Execute publish for a queued clip (called by Edge Function cron)
-export async function executePublish(_queueItem: QueuedClip): Promise<void> {
-  console.log('[PublishQueue] executePublish stub called');
+// Execute a YouTube Shorts upload for a queued clip
+export async function executePublish(queueItem: QueuedClip): Promise<void> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
+  // Load clip data
+  const { data: clip, error: clipErr } = await supabase
+    .from('repurposed_clips')
+    .select('clip_storage_url, ai_title, ai_description, metadata_json')
+    .eq('id', queueItem.clipId)
+    .maybeSingle();
+
+  if (clipErr || !clip) throw new Error('Clip not found');
+
+  if (queueItem.platform === 'youtube_shorts') {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+    // Fetch the video blob from storage URL
+    const videoRes = await fetch(clip.clip_storage_url);
+    if (!videoRes.ok) throw new Error('Could not fetch clip video');
+    const videoBlob = await videoRes.blob();
+    const videoFile = new File([videoBlob], 'clip.mp4', { type: 'video/mp4' });
+
+    const meta = (clip.metadata_json as { hashtags?: string[] }) ?? {};
+    const tags = (meta.hashtags ?? []).join(',');
+
+    const form = new FormData();
+    form.append('video', videoFile);
+    form.append('title', clip.ai_title);
+    form.append('description', clip.ai_description);
+    form.append('tags', tags);
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/youtube-oauth?action=upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Apikey': anonKey,
+      },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? 'YouTube upload failed');
+    }
+  } else {
+    // Instagram Reels / Snapchat — log pending platform support
+    console.warn(`[PublishQueue] Platform ${queueItem.platform} not yet supported for direct publishing.`);
+  }
+
+  // Mark as published in DB
+  await supabase
+    .from('publish_queue')
+    .update({ status: 'published' })
+    .eq('clip_id', queueItem.clipId)
+    .eq('user_id', queueItem.userId);
+
+  await supabase
+    .from('repurposed_clips')
+    .update({ is_queued: false })
+    .eq('id', queueItem.clipId);
 }
