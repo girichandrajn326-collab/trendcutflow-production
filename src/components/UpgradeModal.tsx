@@ -141,6 +141,7 @@ interface UpgradeModalProps {
   onClose: () => void;
   onSelectPlan: (plan: PlanTier) => void;
   onPurchasePlan: (plan: PlanTier) => Promise<void>;
+  userId: string;
 }
 
 type PaymentMethod = 'upi' | 'card';
@@ -171,6 +172,7 @@ export default function UpgradeModal({
   currentPlan,
   onClose,
   onPurchasePlan,
+  userId,
 }: UpgradeModalProps) {
   const { user } = useAuth();
   const [gateway, setGateway] = useState<GatewayState>(null);
@@ -190,9 +192,15 @@ export default function UpgradeModal({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const Razorpay = (window as any).Razorpay;
 
-    if (typeof Razorpay === 'function') {
+    const razorpayKey = (import.meta.env.VITE_RAZORPAY_KEY_ID as string | undefined) ?? '';
+
+    if (typeof Razorpay === 'function' && razorpayKey) {
+      const planKeyMap: Partial<Record<PlanTier, string>> = {
+        creator: 'plan_creator',
+        pro: 'plan_pro',
+      };
       const rzp = new Razorpay({
-        key: 'rzp_test_placeholder',
+        key: razorpayKey,
         amount,
         currency: 'INR',
         name: 'TrendCutFlow',
@@ -200,6 +208,10 @@ export default function UpgradeModal({
         prefill: {
           name:  user?.name  ?? '',
           email: user?.email ?? '',
+        },
+        notes: {
+          user_id: userId,
+          plan_key: planKeyMap[planId] ?? planId,
         },
         theme: { color: '#0EA5E9' },
         modal: {

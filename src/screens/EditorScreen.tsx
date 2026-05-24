@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react';
 import {
   Play, Pause, ChevronLeft, ChevronRight, Clock, Copy,
-  CheckCheck, Send, CalendarClock, Plus, Trash2, Tag,
+  CheckCheck, CalendarClock, Plus, Trash2, Tag,
   FileText, Hash, Wand2, LayoutGrid, Pencil, Check,
   Youtube, Instagram, Ghost, ChevronUp, CheckCircle2,
+  Download, Loader2,
 } from 'lucide-react';
 import type { AppState, SubtitlePreset, TranscriptWord, QueueEntry, QueuePlatform, QueueInterval } from '../store/appStore';
 import type { CSSProperties } from 'react';
@@ -60,6 +61,7 @@ export default function EditorScreen({
   // Client-side trimmed clip: blob URL produced by FFmpeg.wasm, keyed per clip id
   const [clipBlobUrls, setClipBlobUrls]         = useState<Record<string, string>>({});
   const [trimming, setTrimming]                 = useState(false);
+  const [exporting, setExporting]               = useState(false);
 
   // ── Scheduling UI state ──────────────────────────────────────────────────────
   const [schedDropOpen, setSchedDropOpen]       = useState(false);
@@ -145,6 +147,47 @@ export default function EditorScreen({
       setTimeout(() => setCopied(null), 1800);
     });
   }, []);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      // Use already-trimmed blob if available
+      const blobUrl = clipBlobUrls[clip.id];
+      if (blobUrl) {
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
+        a.click();
+        return;
+      }
+
+      // Try to trim on-demand from uploaded file
+      const uploadedFile = state.uploadedFile;
+      if (uploadedFile) {
+        const url = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
+        setClipBlobUrls(prev => ({ ...prev, [clip.id]: url }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
+        a.click();
+        return;
+      }
+
+      // No local video — open source URL in new tab as fallback
+      const src = clip.sourceVideoUrl;
+      if (src) {
+        window.open(src, '_blank', 'noopener');
+        return;
+      }
+
+      alert('No video source available for export. Please re-upload the original file.');
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }, [clip, clipBlobUrls, state.uploadedFile]);
 
   // ── Scrub-drag: click or drag across transcript updates active word ─────────
   const handleTranscriptPointerDown = useCallback((e: React.PointerEvent) => {
@@ -553,6 +596,8 @@ export default function EditorScreen({
             setQueueDrawerOpen={setQueueDrawerOpen}
             onAddToQueue={onAddToQueue}
             onRemoveFromQueue={onRemoveFromQueue}
+            onExport={handleExport}
+            exporting={exporting}
           />
         </div>
       </div>
@@ -891,6 +936,8 @@ interface PublishQueueFooterProps {
   setQueueDrawerOpen: (v: boolean) => void;
   onAddToQueue: (entry: QueueEntry) => void;
   onRemoveFromQueue: (clipId: string) => void;
+  onExport: () => void;
+  exporting: boolean;
 }
 
 function PublishQueueFooter({
@@ -909,6 +956,8 @@ function PublishQueueFooter({
   setQueueDrawerOpen,
   onAddToQueue,
   onRemoveFromQueue,
+  onExport,
+  exporting,
 }: PublishQueueFooterProps) {
   const isQueued     = publishQueue.some(e => e.clipId === activeClipId);
   const activeEntry  = publishQueue.find(e => e.clipId === activeClipId);
@@ -1066,10 +1115,16 @@ function PublishQueueFooter({
             </div>
           )}
 
-          {/* Export */}
-          <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600/80 text-white hover:bg-sky-600 text-xs font-semibold transition-all hover:shadow-[0_0_12px_rgba(14,165,233,0.4)] border border-sky-500/40">
-            <Send size={12} />
-            Export
+          {/* Export / Download */}
+          <button
+            onClick={onExport}
+            disabled={exporting}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-sky-600/80 text-white hover:bg-sky-600 text-xs font-semibold transition-all hover:shadow-[0_0_12px_rgba(14,165,233,0.4)] border border-sky-500/40 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {exporting
+              ? <><Loader2 size={12} className="animate-spin" />Exporting…</>
+              : <><Download size={12} />Export</>
+            }
           </button>
         </div>
       </div>

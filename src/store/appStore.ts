@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import type { VideoStatus } from '../types/database';
-import { transcribeVideo, findViralClips } from '../lib/ai';
+import { transcribeVideo, findViralClips, incrementCredit } from '../lib/ai';
 import type { AuthUser } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 
 export type AppScreen = 'intake' | 'processing' | 'editor';
 export type SubtitlePreset = 'hormozi' | 'minimalist' | 'cyberpunk';
@@ -376,6 +377,28 @@ export function useAppState() {
       ...s,
       user: authUser ? buildUserFromAuth(authUser) : MOCK_USER,
     }));
+
+    // Sync real credit counts from DB when a user logs in
+    if (authUser) {
+      supabase
+        .from('users')
+        .select('current_plan, total_credits, credits_used')
+        .eq('id', authUser.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (!data) return;
+          const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+          setState(s => ({
+            ...s,
+            user: {
+              ...s.user,
+              plan: planMap[data.current_plan] ?? 'free',
+              totalCredits: data.total_credits,
+              videosProcessed: data.credits_used,
+            },
+          }));
+        });
+    }
   }, []);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -561,6 +584,9 @@ export function useAppState() {
           sourceVideoUrl: urlSource,
         };
       });
+
+      // Increment credit server-side (non-blocking)
+      incrementCredit().catch(() => {});
 
       setState(s => ({
         ...s,
