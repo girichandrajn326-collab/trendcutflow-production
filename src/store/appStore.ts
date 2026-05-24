@@ -204,20 +204,20 @@ const MOCK_USER: UserAccount = {
 };
 
 const MOCK_TRANSCRIPT: TranscriptWord[] = [
-  { id: 0, word: 'The',         startMs: 0,    endMs: 220  },
-  { id: 1, word: 'single',      startMs: 280,  endMs: 560  },
-  { id: 2, word: 'biggest',     startMs: 620,  endMs: 940  },
-  { id: 3, word: 'shift',       startMs: 1000, endMs: 1240 },
-  { id: 4, word: 'I',           startMs: 1300, endMs: 1420 },
-  { id: 5, word: 'made',        startMs: 1480, endMs: 1740 },
-  { id: 6, word: 'was',         startMs: 1800, endMs: 1980 },
-  { id: 7, word: 'stop',        startMs: 2040, endMs: 2320 },
-  { id: 8, word: 'selling',     startMs: 2380, endMs: 2700 },
-  { id: 9, word: 'features',    startMs: 2760, endMs: 3200 },
-  { id: 10, word: 'and',        startMs: 3260, endMs: 3440 },
-  { id: 11, word: 'start',      startMs: 3500, endMs: 3780 },
-  { id: 12, word: 'selling',    startMs: 3840, endMs: 4160 },
-  { id: 13, word: 'outcomes.',  startMs: 4220, endMs: 4680 },
+  { id: 0, word: 'The',      startMs: 0,    endMs: 220  },
+  { id: 1, word: 'single',    startMs: 280,  endMs: 560  },
+  { id: 2, word: 'biggest',   startMs: 620,  endMs: 940  },
+  { id: 3, word: 'shift',     startMs: 1000, endMs: 1240 },
+  { id: 4, word: 'I',         startMs: 1300, endMs: 1420 },
+  { id: 5, word: 'made',      startMs: 1480, endMs: 1740 },
+  { id: 6, word: 'was',       startMs: 1800, endMs: 1980 },
+  { id: 7, word: 'stop',      startMs: 2040, endMs: 2320 },
+  { id: 8, word: 'selling',   startMs: 2380, endMs: 2700 },
+  { id: 9, word: 'features',  startMs: 2760, endMs: 3200 },
+  { id: 10, word: 'and',      startMs: 3260, endMs: 3440 },
+  { id: 11, word: 'start',     startMs: 3500, endMs: 3780 },
+  { id: 12, word: 'selling',   startMs: 3840, endMs: 4160 },
+  { id: 13, word: 'outcomes.', startMs: 4220, endMs: 4680 },
 ];
 
 const MOCK_CLIPS: Clip[] = [
@@ -230,100 +230,21 @@ const MOCK_CLIPS: Clip[] = [
     endTime: 58,
     transcript: MOCK_TRANSCRIPT,
     metadata: {
-      viralTitles: [
-        'I Changed ONE Thing & Made 5x More Revenue in 60 Days',
-        'Stop Selling Features (Do This Instead)',
-        'The Mindset That Took Me From 2% to 11% Conversion Rate',
-      ],
+      viralTitles: ['I Changed ONE Thing & Made 5x More Revenue in 60 Days', 'Stop Selling Features (Do This Instead)', 'The Mindset That Took Me From 2% to 11% Conversion Rate'],
       seoDescription: 'Discover the single mindset shift that transformed my business revenue. Stop selling features and start selling outcomes.',
       hashtags: ['#BusinessGrowth', '#SalesTips', '#Entrepreneur', '#RevenueGrowth', '#MindsetShift', '#ConversionRate'],
       algorithmicTags: ['mindset shift business', 'increase conversion rate', 'sales strategy 2024', 'entrepreneur tips', 'business revenue growth'],
     },
   },
-  {
-    id: 'clip-2',
-    title: 'Most Creators Quit RIGHT Before Going Viral (Here\'s Proof)',
-    duration: '1:02',
-    thumbnail: THUMBNAIL_POOL[1],
-    startTime: 62,
-    endTime: 124,
-    transcript: MOCK_TRANSCRIPT,
-    metadata: {
-      viralTitles: [
-        'Most Creators Quit RIGHT Before Going Viral (Here\'s Proof)',
-        'The Algorithm Rewards This One Thing (It\'s Not Talent)',
-        'I Studied 200 Viral Accounts — They All Did This',
-      ],
-      seoDescription: 'After studying 200+ creator accounts that went viral, I found a shocking pattern. Most people quit between days 60-90.',
-      hashtags: ['#ContentCreator', '#YouTubeTips', '#ViralContent', '#CreatorEconomy', '#SocialMediaGrowth'],
-      algorithmicTags: ['creator tips going viral', 'youtube algorithm 2024', 'content creator strategy', 'grow on social media'],
-    },
-  },
-  {
-    id: 'clip-3',
-    title: 'The 5-Line Cold Email That Gets 40% Reply Rates',
-    duration: '0:54',
-    thumbnail: THUMBNAIL_POOL[2],
-    startTime: 130,
-    endTime: 184,
-    transcript: MOCK_TRANSCRIPT,
-    metadata: {
-      viralTitles: [
-        'The 5-Line Cold Email That Gets 40% Reply Rates',
-        'I Sent 10,000 Cold Emails — Here\'s What Actually Works',
-        'Copy This Cold Email Formula (40% Response Rate)',
-      ],
-      seoDescription: 'Cold email doesn\'t have to be painful. After 10,000+ cold emails, I\'ve refined a 5-line formula that achieves 40% reply rates.',
-      hashtags: ['#ColdEmail', '#EmailMarketing', '#LeadGeneration', '#SalesTips', '#OutreachStrategy'],
-      algorithmicTags: ['cold email tips', 'email outreach strategy', 'b2b sales tactics', 'lead generation emails'],
-    },
-  },
-  {
-    id: 'clip-4',
-    title: 'I Shared My Real Revenue Numbers — My Following Tripled',
-    duration: '1:05',
-    thumbnail: THUMBNAIL_POOL[3],
-    startTime: 190,
-    endTime: 255,
-    transcript: MOCK_TRANSCRIPT,
-    metadata: {
-      viralTitles: [
-        'I Shared My Real Revenue Numbers — My Following Tripled',
-        'Build in Public: The Growth Strategy Nobody Talks About',
-        'Why Showing Your Failures Online Is the Best Marketing',
-      ],
-      seoDescription: 'Building in public transformed my online presence. By sharing real revenue and real failures, I tripled my following in 4 months.',
-      hashtags: ['#BuildInPublic', '#CreatorEconomy', '#Transparency', '#PersonalBrand', '#StartupLife'],
-      algorithmicTags: ['build in public strategy', 'personal brand growth', 'creator transparency', 'grow following fast'],
-    },
-  },
-  {
-    id: 'clip-5',
-    title: 'A Client Said I Was "Too Cheap to Be Credible" — So I Raised Prices',
-    duration: '0:51',
-    thumbnail: THUMBNAIL_POOL[4],
-    startTime: 260,
-    endTime: 311,
-    transcript: MOCK_TRANSCRIPT,
-    metadata: {
-      viralTitles: [
-        'A Client Said I Was "Too Cheap to Be Credible" — So I Raised Prices',
-        'Raising My Prices 40% Got Me MORE Clients (Here\'s Why)',
-        'The 2AM Lesson That Changed My Entire Pricing Strategy',
-      ],
-      seoDescription: 'A late-night conversation taught me the most important pricing lesson of my career. When a prospect said I was "too cheap to be credible", I raised my prices 40%.',
-      hashtags: ['#PricingStrategy', '#Freelance', '#BusinessTips', '#Consulting', '#ValueBasedPricing'],
-      algorithmicTags: ['pricing strategy business', 'raise your prices', 'value based pricing', 'freelancer tips'],
-    },
-  },
+  // ... (keeping other MOCK_CLIPS truncated for brevity if needed, but keeping full in your file is fine)
 ];
 
 const INITIAL_PIPELINE: PipelineStep[] = [
   { id: 'transcribe', label: 'Transcribing audio (Whisper)',  status: 'pending' },
   { id: 'detect',     label: 'Detecting viral hooks (GPT-4o)', status: 'pending' },
   { id: 'slice',      label: 'Slicing video clips (FFmpeg)',  status: 'pending' },
-  { id: 'subtitles',  label: 'Burning captions',             status: 'pending' },
-  { id: 'metadata',   label: 'Generating metadata',          status: 'pending' },
+  { id: 'subtitles',  label: 'Burning captions',              status: 'pending' },
+  { id: 'metadata',   label: 'Generating metadata',           status: 'pending' },
 ];
 
 // ─── useAppState hook ─────────────────────────────────────────────────────────
@@ -348,140 +269,7 @@ export function useAppState() {
     toasts: [],
   });
 
-  const setScreen = useCallback((screen: AppScreen) => {
-    setState(s => ({ ...s, screen }));
-  }, []);
-
-  const setActiveClipIndex = useCallback((i: number) => {
-    setState(s => ({ ...s, activeClipIndex: i, activeWordIndex: 0, randomStyleSeed: generateRandomStyleSeed() }));
-  }, []);
-
-  const setSubtitlePreset = useCallback((preset: SubtitlePreset) => {
-    setState(s => ({ ...s, subtitlePreset: preset, randomStyleSeed: generateRandomStyleSeed() }));
-  }, []);
-
-  const setActiveWordIndex = useCallback((i: number) => {
-    setState(s => ({ ...s, activeWordIndex: i }));
-  }, []);
-
-  const openUpgradeModal = useCallback(() => {
-    setState(s => ({ ...s, isUpgradeModalOpen: true, isAccountDropdownOpen: false }));
-  }, []);
-
-  const closeUpgradeModal = useCallback(() => {
-    setState(s => ({ ...s, isUpgradeModalOpen: false }));
-  }, []);
-
-  const toggleAccountDropdown = useCallback(() => {
-    setState(s => ({ ...s, isAccountDropdownOpen: !s.isAccountDropdownOpen }));
-  }, []);
-
-  const closeAccountDropdown = useCallback(() => {
-    setState(s => ({ ...s, isAccountDropdownOpen: false }));
-  }, []);
-
-  const setInputUrl = useCallback((url: string) => {
-    setState(s => ({ ...s, inputUrl: url }));
-  }, []);
-
-  const setIsDragging = useCallback((isDragging: boolean) => {
-    setState(s => ({ ...s, isDragging }));
-  }, []);
-
-  const setUploadedFile = useCallback((file: File | null) => {
-    setState(s => ({ ...s, uploadedFile: file }));
-  }, []);
-
-  const addToPublishQueue = useCallback((entry: QueueEntry) => {
-    setState(s => ({
-      ...s,
-      publishQueue: s.publishQueue.some(e => e.clipId === entry.clipId)
-        ? s.publishQueue
-        : [...s.publishQueue, entry],
-    }));
-  }, []);
-
-  const removeFromPublishQueue = useCallback((clipId: string) => {
-    setState(s => ({ ...s, publishQueue: s.publishQueue.filter(e => e.clipId !== clipId) }));
-  }, []);
-
-  const selectPlan = useCallback((plan: PlanTier) => {
-    setState(s => ({
-      ...s,
-      user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] },
-      isUpgradeModalOpen: false,
-    }));
-  }, []);
-
-  const purchasePlan = useCallback((plan: PlanTier): Promise<void> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const planNames: Record<PlanTier, string> = {
-          free: 'Free',
-          creator: 'Creator Flow',
-          pro: 'Pro Flow',
-        };
-        const newCredits = PLAN_LIMITS[plan];
-        const toastId = `toast-${Date.now()}`;
-        setState(s => ({
-          ...s,
-          user: { ...s.user, plan, totalCredits: newCredits },
-          isUpgradeModalOpen: false,
-          toasts: [...s.toasts, {
-            id: toastId,
-            type: 'success',
-            title: 'Payment Verified via Razorpay!',
-            message: `Welcome to your new Flow — ${newCredits} credit${newCredits > 1 ? 's' : ''}/month now active.`,
-          }],
-        }));
-        setTimeout(() => {
-          setState(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== toastId) }));
-        }, 4800);
-        resolve();
-      }, 2200);
-    });
-  }, []);
-
-  const dismissToast = useCallback((id: string) => {
-    setState(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) }));
-  }, []);
-
-  // Update user identity from external auth (AuthContext)
-  const setAuthUser = useCallback((authUser: { id: string; email: string; name: string } | null) => {
-    if (!authUser) {
-      setState(s => ({
-        ...s,
-        user: { ...MOCK_USER },
-        screen: 'intake',
-        publishQueue: [],
-      }));
-      return;
-    }
-    const initials = authUser.name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-    setState(s => ({
-      ...s,
-      user: {
-        ...s.user,
-        id: authUser.id,
-        email: authUser.email,
-        name: authUser.name,
-        avatarInitials: initials,
-      },
-    }));
-  }, []);
-
-  const addToast = useCallback((toast: Omit<Toast, 'id'>) => {
-    const id = `toast-${Date.now()}`;
-    setState(s => ({ ...s, toasts: [...s.toasts, { ...toast, id }] }));
-    setTimeout(() => {
-      setState(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) }));
-    }, 4800);
-  }, []);
+  // ... (keep all your existing helper functions like setScreen, setActiveClipIndex, etc.)
 
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
@@ -515,13 +303,14 @@ export function useAppState() {
 
       const videoSourceId = crypto.randomUUID();
 
-      const clips: Clip[] = viralResults.map((r, i) => {
+      const newClips: Clip[] = viralResults.map((r, i) => {
         const clipWords = words.filter(
           w => w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime,
         );
+        
         const uiWords: TranscriptWord[] = clipWords.length > 0
           ? clipWords.map(w => ({ id: w.id, word: w.word, startMs: w.start_ms, endMs: w.end_ms }))
-          : MOCK_TRANSCRIPT;
+          : [{ id: 0, word: 'Transcript pending', startMs: 0, endMs: 1000 }];
 
         return {
           id: crypto.randomUUID(),
@@ -543,21 +332,17 @@ export function useAppState() {
 
       setState(s => ({
         ...s,
-        clips: clips.length > 0 ? clips : MOCK_CLIPS,
+        clips: newClips,
         activeClipIndex: 0,
         activeWordIndex: 0,
         pipeline: setStepStatus(s.pipeline, 'metadata', 'done'),
         screen: 'editor',
         randomStyleSeed: generateRandomStyleSeed(),
-      }));
-
-      // Update credit usage
-      setState(s => ({
-        ...s,
         user: { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
       }));
 
     } catch (err) {
+      console.error("Pipeline failure:", err);
       const msg = err instanceof Error ? err.message : 'Unknown error';
       setState(s => ({
         ...s,
@@ -565,57 +350,6 @@ export function useAppState() {
         pipeline: s.pipeline.map(p => p.status === 'active' ? { ...p, status: 'error' } : p),
       }));
     }
-  }, [state]);
+  }, [state.uploadedFile, state.inputUrl]);
 
-  const updateClipTitle = useCallback((clipId: string, newTitle: string) => {
-    setState(s => ({
-      ...s,
-      clips: s.clips.map(c => c.id === clipId ? { ...c, title: newTitle } : c),
-    }));
-  }, []);
-
-  const updateMetadataTitle = useCallback((clipId: string, index: number, value: string) => {
-    setState(s => ({
-      ...s,
-      clips: s.clips.map(c =>
-        c.id === clipId
-          ? { ...c, metadata: { ...c.metadata, viralTitles: c.metadata.viralTitles.map((t, i) => i === index ? value : t) } }
-          : c
-      ),
-    }));
-  }, []);
-
-  const creditLabel = () => {
-    const limit = PLAN_LIMITS[state.user.plan];
-    return `${state.user.videosProcessed} / ${limit} Videos Processed`;
-  };
-
-  const hasCredits = () => state.user.videosProcessed < PLAN_LIMITS[state.user.plan];
-
-  return {
-    state,
-    setScreen,
-    setActiveClipIndex,
-    setSubtitlePreset,
-    setActiveWordIndex,
-    openUpgradeModal,
-    closeUpgradeModal,
-    toggleAccountDropdown,
-    closeAccountDropdown,
-    setInputUrl,
-    setIsDragging,
-    setUploadedFile,
-    addToPublishQueue,
-    removeFromPublishQueue,
-    selectPlan,
-    purchasePlan,
-    dismissToast,
-    addToast,
-    setAuthUser,
-    runPipeline,
-    updateClipTitle,
-    updateMetadataTitle,
-    creditLabel,
-    hasCredits,
-  };
-}
+  // ... (keep the rest of your file from updateClipTitle onwards)
