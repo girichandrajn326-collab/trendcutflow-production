@@ -376,6 +376,22 @@ export function useAppState() {
     setState(s => ({
       ...s,
       user: authUser ? buildUserFromAuth(authUser) : MOCK_USER,
+      // Reset session-scoped state on logout
+      ...(authUser ? {} : {
+        screen: 'intake' as AppScreen,
+        clips: [],
+        publishQueue: [],
+        activeClipIndex: 0,
+        activeWordIndex: 0,
+        inputUrl: '',
+        uploadedFile: null,
+        isDragging: false,
+        pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
+        pipelineError: null,
+        toasts: [],
+        isUpgradeModalOpen: false,
+        isAccountDropdownOpen: false,
+      }),
     }));
 
     // Sync credits + plan + publish queue from DB when a user logs in

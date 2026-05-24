@@ -35,13 +35,35 @@ export default function HistoryScreen({ user }: HistoryScreenProps) {
   useEffect(() => {
     if (!user.id) return;
     setLoading(true);
+
+    // Two-step: first get the user's video_sources, then fetch clips for those sources.
+    // Avoids relying on PostgREST filter-through-join which can bypass RLS checks.
     supabase
-      .from('repurposed_clips')
-      .select('*, video_sources!inner(title, source_url, user_id, created_at)')
-      .eq('video_sources.user_id', user.id)
-      .order('video_sources.created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (!error && data) setClips(data as HistoryClip[]);
+      .from('video_sources')
+      .select('id, title, source_url, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .then(async ({ data: sources, error: srcErr }) => {
+        if (srcErr || !sources || sources.length === 0) {
+          setLoading(false);
+          return;
+        }
+        const sourceIds = sources.map(s => s.id);
+        const { data: clipRows, error: clipErr } = await supabase
+          .from('repurposed_clips')
+          .select('*')
+          .in('video_source_id', sourceIds);
+
+        if (clipErr) { setLoading(false); return; }
+
+        // Attach source info to each clip
+        const sourceMap = Object.fromEntries(sources.map(s => [s.id, s]));
+        const merged = (clipRows ?? []).map(c => ({
+          ...c,
+          video_sources: sourceMap[c.video_source_id] ?? null,
+        })) as HistoryClip[];
+
+        setClips(merged);
         setLoading(false);
       });
   }, [user.id]);
