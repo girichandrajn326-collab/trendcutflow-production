@@ -8,6 +8,20 @@ interface AuthScreenProps {
 
 type AuthTab = 'signin' | 'signup' | 'forgot';
 
+// Track whether this browser has signed in before to personalise the greeting.
+function getVisitCount(): number {
+  try {
+    return parseInt(localStorage.getItem('tcf_visit_count') ?? '0', 10);
+  } catch {
+    return 0;
+  }
+}
+function incrementVisitCount() {
+  try {
+    localStorage.setItem('tcf_visit_count', String(getVisitCount() + 1));
+  } catch { /* ignore */ }
+}
+
 export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   const { login, signup, resetPassword } = useAuth();
 
@@ -22,6 +36,8 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   const [nameError, setNameError]         = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [resetSent, setResetSent]         = useState(false);
+  // Only show "Welcome back" if the user has visited the sign-in page before.
+  const [isReturning]                     = useState(() => getVisitCount() > 0);
   const emailRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -55,10 +71,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
       setIsSubmitting(true);
       try {
         const { error } = await resetPassword(email.trim());
-        if (error) {
-          setGlobalError(error);
-          return;
-        }
+        if (error) { setGlobalError(error); return; }
         setResetSent(true);
       } finally {
         setIsSubmitting(false);
@@ -82,27 +95,23 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
     if (hasError) return;
 
     setIsSubmitting(true);
-
     try {
       if (tab === 'signin') {
         const { error } = await login(email.trim(), password);
-        if (error) {
-          setGlobalError(error);
-          return;
-        }
+        if (error) { setGlobalError(error); return; }
+        incrementVisitCount();
         onSuccess(email.split('@')[0]);
       } else {
         const { error } = await signup(name.trim(), email.trim(), password);
         if (error) {
           if (error.toLowerCase().includes('permanent') || error.toLowerCase().includes('temporary')) {
             setEmailError(error);
-          } else if (error.toLowerCase().includes('already exists') || error.toLowerCase().includes('already registered')) {
-            setGlobalError(error);
           } else {
             setGlobalError(error);
           }
           return;
         }
+        incrementVisitCount();
         onSuccess(name.trim());
       }
     } finally {
@@ -131,7 +140,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
 
         <div className="bg-slate-900/80 backdrop-blur-xl border border-white/[0.08] rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
 
-          {/* Tab switcher — hidden on forgot password view */}
+          {/* Tab switcher */}
           {tab !== 'forgot' && (
             <div className="flex border-b border-white/[0.06]">
               {(['signin', 'signup'] as AuthTab[]).map(t => (
@@ -151,7 +160,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             </div>
           )}
 
-          {/* ── Forgot password view ── */}
+          {/* ── Forgot password ── */}
           {tab === 'forgot' ? (
             <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
               <button
@@ -182,13 +191,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 </div>
               ) : (
                 <>
-                  {globalError && (
-                    <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl bg-red-500/[0.08] border border-red-500/25">
-                      <AlertCircle size={15} className="text-red-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-red-300 text-xs leading-relaxed">{globalError}</p>
-                    </div>
-                  )}
-
+                  {globalError && <ErrorBanner message={globalError} />}
                   <Field
                     label="Email Address"
                     icon={<Mail size={15} />}
@@ -200,23 +203,12 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                     autoComplete="email"
                     inputRef={emailRef}
                   />
-
                   <button
                     type="submit"
                     disabled={isSubmitting}
                     className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-sky-600 to-cyan-500 text-white text-sm font-bold flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-lg shadow-sky-900/30"
                   >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        Sending reset link…
-                      </>
-                    ) : (
-                      <>
-                        Send Reset Link
-                        <ArrowRight size={15} />
-                      </>
-                    )}
+                    {isSubmitting ? <><Loader2 size={16} className="animate-spin" />Sending…</> : <>Send Reset Link <ArrowRight size={15} /></>}
                   </button>
                 </>
               )}
@@ -232,25 +224,22 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
               )}
             </form>
           ) : (
-            /* ── Sign in / Sign up view ── */
+            /* ── Sign in / Sign up ── */
             <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
               <div className="mb-1">
                 <h2 className="text-white text-lg font-bold">
-                  {tab === 'signin' ? 'Welcome back' : 'Get your free credits'}
+                  {tab === 'signin'
+                    ? (isReturning ? 'Welcome back' : 'Sign in to your account')
+                    : 'Get your free credits'}
                 </h2>
                 <p className="text-slate-500 text-xs mt-0.5">
                   {tab === 'signin'
-                    ? 'Sign in to access your viral shorts workspace'
+                    ? 'Access your viral shorts workspace'
                     : 'Start with 1 free video every month — no card required'}
                 </p>
               </div>
 
-              {globalError && (
-                <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl bg-red-500/[0.08] border border-red-500/25">
-                  <AlertCircle size={15} className="text-red-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-red-300 text-xs leading-relaxed">{globalError}</p>
-                </div>
-              )}
+              {globalError && <ErrorBanner message={globalError} />}
 
               {tab === 'signup' && (
                 <Field
@@ -277,7 +266,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 inputRef={emailRef}
               />
 
-              {/* Password + forgot link row */}
+              {/* Password */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between pl-1">
                   <label className="block text-xs font-medium text-slate-400">Password</label>
@@ -291,11 +280,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                     </button>
                   )}
                 </div>
-                <div className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl border bg-white/[0.03] transition-all duration-200 focus-within:border-sky-500/50 focus-within:bg-sky-500/[0.03] ${
-                  passwordError
-                    ? 'border-red-500/50 bg-red-500/[0.04]'
-                    : 'border-white/[0.08] hover:border-white/[0.14]'
-                }`}>
+                <div className={`input-field ${passwordError ? 'input-field--error' : ''}`}>
                   <Lock size={15} className={passwordError ? 'text-red-400/70' : 'text-slate-500'} />
                   <input
                     type={showPassword ? 'text' : 'password'}
@@ -303,7 +288,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     autoComplete={tab === 'signup' ? 'new-password' : 'current-password'}
-                    className="flex-1 bg-transparent text-white text-sm placeholder-slate-600 outline-none"
+                    className="auth-input"
                   />
                   <button
                     type="button"
@@ -314,12 +299,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                     {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
-                {passwordError && (
-                  <p className="text-red-400 text-[11px] pl-1 flex items-center gap-1">
-                    <AlertCircle size={11} />
-                    {passwordError}
-                  </p>
-                )}
+                {passwordError && <FieldError message={passwordError} />}
               </div>
 
               <button
@@ -328,15 +308,9 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 className="w-full mt-2 py-3 rounded-xl bg-gradient-to-r from-sky-600 to-cyan-500 text-white text-sm font-bold flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-lg shadow-sky-900/30 hover:shadow-sky-900/50"
               >
                 {isSubmitting ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    {tab === 'signin' ? 'Signing in…' : 'Creating account…'}
-                  </>
+                  <><Loader2 size={16} className="animate-spin" />{tab === 'signin' ? 'Signing in…' : 'Creating account…'}</>
                 ) : (
-                  <>
-                    {tab === 'signin' ? 'Sign In' : 'Create Account — It\'s Free'}
-                    <ArrowRight size={15} />
-                  </>
+                  <>{tab === 'signin' ? 'Sign In' : "Create Account — It's Free"}<ArrowRight size={15} /></>
                 )}
               </button>
 
@@ -376,7 +350,25 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   );
 }
 
-// ─── Field helper ─────────────────────────────────────────────────────────────
+// ─── Shared sub-components ────────────────────────────────────────────────────
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl bg-red-500/[0.08] border border-red-500/25">
+      <AlertCircle size={15} className="text-red-400 flex-shrink-0 mt-0.5" />
+      <p className="text-red-300 text-xs leading-relaxed">{message}</p>
+    </div>
+  );
+}
+
+function FieldError({ message }: { message: string }) {
+  return (
+    <p className="text-red-400 text-[11px] pl-1 flex items-center gap-1">
+      <AlertCircle size={11} />
+      {message}
+    </p>
+  );
+}
 
 interface FieldProps {
   label: string;
@@ -394,11 +386,7 @@ function Field({ label, icon, type, placeholder, value, onChange, error, autoCom
   return (
     <div className="space-y-1.5">
       <label className="block text-xs font-medium text-slate-400 pl-1">{label}</label>
-      <div className={`flex items-center gap-2.5 px-3.5 py-3 rounded-xl border bg-white/[0.03] transition-all duration-200 focus-within:border-sky-500/50 focus-within:bg-sky-500/[0.03] ${
-        error
-          ? 'border-red-500/50 bg-red-500/[0.04]'
-          : 'border-white/[0.08] hover:border-white/[0.14]'
-      }`}>
+      <div className={`input-field ${error ? 'input-field--error' : ''}`}>
         <span className={error ? 'text-red-400/70' : 'text-slate-500'}>{icon}</span>
         <input
           ref={inputRef}
@@ -407,15 +395,10 @@ function Field({ label, icon, type, placeholder, value, onChange, error, autoCom
           value={value}
           onChange={e => onChange(e.target.value)}
           autoComplete={autoComplete}
-          className="flex-1 bg-transparent text-white text-sm placeholder-slate-600 outline-none"
+          className="auth-input"
         />
       </div>
-      {error && (
-        <p className="text-red-400 text-[11px] pl-1 flex items-center gap-1">
-          <AlertCircle size={11} />
-          {error}
-        </p>
-      )}
+      {error && <FieldError message={error} />}
     </div>
   );
 }

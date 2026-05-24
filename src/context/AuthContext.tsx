@@ -98,22 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: error.message };
     }
 
-    // Create the public user profile row
-    if (data.user) {
-      const { error: insertError } = await supabase.from('users').insert({
-        id: data.user.id,
-        email,
-        name,
-        current_plan: 'FREE',
-        total_credits: 1,
-        credits_used: 0,
-      });
-      // Non-fatal: profile row may fail if already inserted by a trigger
-      if (insertError) {
-        console.warn('User profile insert warning:', insertError.message);
-      }
-    }
-
+    // Profile row is created automatically by the handle_new_user trigger.
     return { error: null };
   }, []);
 

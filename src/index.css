@@ -150,6 +150,52 @@
   animation: slideInRight 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* ── Auth input fields ──────────────────────────────────────────────────────── */
+/* Defined outside Tailwind to defeat browser autofill white-background override */
+.input-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  transition: border-color 0.2s, background 0.2s;
+}
+.input-field:focus-within {
+  border-color: rgba(14, 165, 233, 0.5);
+  background: rgba(14, 165, 233, 0.03);
+}
+.input-field:not(.input-field--error):hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.input-field--error {
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  background: rgba(239, 68, 68, 0.04) !important;
+}
+.auth-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: #ffffff;
+  font-size: 14px;
+  outline: none;
+  border: none;
+}
+.auth-input::placeholder {
+  color: rgba(100, 116, 139, 0.7);
+}
+/* Defeat Chromium's autofill white/yellow box */
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:hover,
+.auth-input:-webkit-autofill:focus,
+.auth-input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #0d1422 inset !important;
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
 /* Drag-over state */
 .drag-active {
   border-color: #8B5CF6 !important;
