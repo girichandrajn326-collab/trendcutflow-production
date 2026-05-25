@@ -194,7 +194,10 @@ export default function UpgradeModal({
 
     const razorpayKey = (import.meta.env.VITE_RAZORPAY_KEY_ID as string | undefined) ?? '';
 
-    if (typeof Razorpay === 'function' && razorpayKey) {
+    // Only open real Razorpay checkout when key starts with "rzp_"
+    const keyIsValid = typeof razorpayKey === 'string' && razorpayKey.startsWith('rzp_');
+
+    if (typeof Razorpay === 'function' && keyIsValid) {
       const planKeyMap: Partial<Record<PlanTier, string>> = {
         creator: 'plan_creator',
         pro: 'plan_pro',
@@ -227,7 +230,7 @@ export default function UpgradeModal({
       });
       rzp.open();
     } else {
-      // Simulation path: Razorpay script unavailable in preview environment
+      // Simulation path: no valid Razorpay key configured
       await onPurchasePlan(planId);
     }
   }
