@@ -10,6 +10,8 @@ interface HeaderProps {
   onNavigateHome: () => void;
   onNavigateHistory: () => void;
   onLogout: () => void;
+  onOpenProfile?: () => void;
+  onOpenPreferences?: () => void;
 }
 
 export default function Header({
@@ -20,6 +22,8 @@ export default function Header({
   onNavigateHome,
   onNavigateHistory,
   onLogout,
+  onOpenProfile,
+  onOpenPreferences,
 }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { user, isAccountDropdownOpen } = state;
@@ -155,9 +159,9 @@ export default function Header({
 
                 {/* Menu items */}
                 <div className="p-2">
-                  <DropdownItem icon={<User size={14} />} label="Profile Settings" />
+                  <DropdownItem icon={<User size={14} />} label="Profile Settings" onClick={onOpenProfile} />
                   <DropdownItem icon={<CreditCard size={14} />} label="Billing & Plans" onClick={onOpenUpgradeModal} />
-                  <DropdownItem icon={<Settings size={14} />} label="Preferences" />
+                  <DropdownItem icon={<Settings size={14} />} label="Preferences" onClick={onOpenPreferences} />
                 </div>
 
                 {/* Upgrade CTA if not pro */}

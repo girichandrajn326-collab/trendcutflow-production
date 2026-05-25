@@ -164,6 +164,27 @@ export const PLAN_LIMITS: Record<PlanTier, number> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function getFileDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(video.duration);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read video metadata'));
+    };
+    video.src = url;
+  });
+}
+
+function isYouTubeUrl(url: string): boolean {
+  return /youtube\.com|youtu\.be/i.test(url);
+}
+
 function generateRandomStyleSeed(): number {
   return 0.97 + Math.random() * 0.03;
 }
@@ -599,6 +620,19 @@ export function useAppState() {
     // Check credit limit
     if (state.user.videosProcessed >= state.user.totalCredits) return;
 
+    // YouTube and Twitch URLs cannot be fetched as raw video files from the browser.
+    // The transcription service requires an actual audio/video file.
+    if (typeof source === 'string' && isYouTubeUrl(source)) {
+      setState(s => ({
+        ...s,
+        screen: 'processing',
+        clips: [],
+        pipeline: INITIAL_PIPELINE.map(step => ({ ...step })),
+        pipelineError: 'YouTube URLs cannot be processed directly — the browser cannot download YouTube video files due to platform restrictions. Please download the video first and upload the file instead.',
+      }));
+      return;
+    }
+
     setState(s => ({
       ...s,
       screen: 'processing',
@@ -608,12 +642,19 @@ export function useAppState() {
     }));
 
     try {
+      // Measure actual video duration before transcribing so mock clip timestamps
+      // can be scaled to fit the real video.
+      let videoDurationSecs: number | undefined;
+      if (source instanceof File) {
+        videoDurationSecs = await getFileDuration(source).catch(() => undefined);
+      }
+
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'active') }));
       const { text: transcriptText, words } = await transcribeVideo(source);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'done') }));
 
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'active') }));
-      const viralResults = await findViralClips(transcriptText);
+      const viralResults = await findViralClips(transcriptText, videoDurationSecs);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'done') }));
 
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'active') }));

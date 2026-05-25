@@ -252,11 +252,8 @@ export default function EditorScreen({
         return;
       }
 
-      // Fallback: open source URL
-      const src = clip.sourceVideoUrl;
-      if (src) { window.open(src, '_blank', 'noopener'); return; }
-
-      alert('No video source available for export. Please re-upload the original file.');
+      // No video blob available — the original file is needed for export
+      alert('Export requires the original video file. Please go back to the upload screen and re-upload the file to enable trimmed clip downloads.');
     } catch (err) {
       console.error('Export failed:', err);
       alert('Export failed. Please try again.');

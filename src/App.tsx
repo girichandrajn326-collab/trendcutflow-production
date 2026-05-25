@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppState } from './store/appStore';
 import { useAuth } from './context/AuthContext';
 import Header from './components/Header';
@@ -10,6 +10,8 @@ import EditorScreen from './screens/EditorScreen';
 import AuthScreen from './screens/AuthScreen';
 import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import HistoryScreen from './screens/HistoryScreen';
+import ProfileSettingsModal from './components/ProfileSettingsModal';
+import PreferencesModal from './components/PreferencesModal';
 
 // Detect Supabase password-reset redirect (hash contains type=recovery)
 function isPasswordResetFlow(): boolean {
@@ -21,11 +23,18 @@ export default function App() {
   const app = useAppState();
   const { state } = app;
   const auth = useAuth();
+  const [showProfile, setShowProfile]         = useState(false);
+  const [showPreferences, setShowPreferences] = useState(false);
 
   useEffect(() => {
     app.setAuthUser(auth.user);
+    // Always land on intake when auth state resolves so stale editor/processing
+    // screens from a previous session don't persist across browser reloads.
+    if (auth.user) {
+      app.setScreen('intake');
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.user]);
+  }, [auth.user?.id]);
 
   useEffect(() => {
     app.closeAccountDropdown();
@@ -98,6 +107,8 @@ export default function App() {
         onNavigateHome={() => app.setScreen('intake')}
         onNavigateHistory={() => app.setScreen('history')}
         onLogout={auth.logout}
+        onOpenProfile={() => { app.closeAccountDropdown(); setShowProfile(true); }}
+        onOpenPreferences={() => { app.closeAccountDropdown(); setShowPreferences(true); }}
       />
       {state.screen === 'intake' && (
         <IntakeScreen
@@ -110,7 +121,11 @@ export default function App() {
         />
       )}
       {state.screen === 'processing' && (
-        <ProcessingScreen pipeline={state.pipeline} pipelineError={state.pipelineError} />
+        <ProcessingScreen
+          pipeline={state.pipeline}
+          pipelineError={state.pipelineError}
+          onGoBack={() => app.setScreen('intake')}
+        />
       )}
       {state.screen === 'history' && (
         <HistoryScreen user={state.user} />
@@ -140,6 +155,19 @@ export default function App() {
         />
       )}
       <ToastStack toasts={state.toasts} onDismiss={app.dismissToast} />
+      {showProfile && (
+        <ProfileSettingsModal
+          user={state.user}
+          onClose={() => setShowProfile(false)}
+          onSaved={(name) => {
+            app.addToast({ type: 'success', title: 'Profile updated', message: `Display name saved as "${name}".` });
+            setShowProfile(false);
+          }}
+        />
+      )}
+      {showPreferences && (
+        <PreferencesModal onClose={() => setShowPreferences(false)} />
+      )}
     </div>
   );
 }

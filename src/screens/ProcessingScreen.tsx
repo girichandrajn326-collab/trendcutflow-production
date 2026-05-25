@@ -1,9 +1,10 @@
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Upload } from 'lucide-react';
 import type { PipelineStep } from '../store/appStore';
 
 interface ProcessingScreenProps {
   pipeline: PipelineStep[];
   pipelineError: string | null;
+  onGoBack?: () => void;
 }
 
 const CLIP_TITLES = [
@@ -14,7 +15,7 @@ const CLIP_TITLES = [
   'The 2AM Lesson That Changed How I Price Everything',
 ];
 
-export default function ProcessingScreen({ pipeline, pipelineError }: ProcessingScreenProps) {
+export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: ProcessingScreenProps) {
   const allDone = pipeline.every(s => s.status === 'done');
 
   return (
@@ -49,9 +50,29 @@ export default function ProcessingScreen({ pipeline, pipelineError }: Processing
 
         {/* Error banner */}
         {pipelineError && (
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/[0.08] border border-red-500/20 mb-6">
-            <AlertCircle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
-            <p className="text-red-300 text-sm">{pipelineError}</p>
+          <div className="mb-6 space-y-3">
+            <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/[0.08] border border-red-500/20">
+              <AlertCircle size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-red-300 text-sm leading-relaxed">{pipelineError}</p>
+            </div>
+            {onGoBack && (
+              <div className="flex gap-3">
+                <button
+                  onClick={onGoBack}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/[0.05] border border-white/[0.08] text-slate-300 hover:text-white text-sm font-medium transition-colors"
+                >
+                  <ArrowLeft size={14} />
+                  Go Back
+                </button>
+                <button
+                  onClick={onGoBack}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600/80 text-white hover:bg-sky-600 text-sm font-semibold transition-colors"
+                >
+                  <Upload size={14} />
+                  Upload a File Instead
+                </button>
+              </div>
+            )}
           </div>
         )}
 

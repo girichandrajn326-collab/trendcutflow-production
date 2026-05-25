@@ -72,7 +72,7 @@ export async function transcribeVideo(videoFile: File | string): Promise<Transcr
 
 // ─── Step 2: Find Viral Clips ─────────────────────────────────────────────────
 
-export async function findViralClips(transcriptText: string): Promise<ViralClipResult[]> {
+export async function findViralClips(transcriptText: string, videoDurationSecs?: number): Promise<ViralClipResult[]> {
   const authHeader = await getAuthHeader();
   if (!authHeader) return simulateMockViralClips();
 
@@ -91,12 +91,36 @@ export async function findViralClips(transcriptText: string): Promise<ViralClipR
     }
 
     const data = await res.json();
-    return Array.isArray(data) ? data.slice(0, 5) : simulateMockViralClips();
+    const clips = Array.isArray(data) ? data.slice(0, 5) : await simulateMockViralClips(videoDurationSecs);
+    return clampClipsToDuration(clips, videoDurationSecs);
   } catch (err) {
     if (err instanceof Error && err.message.toLowerCase().includes('credit')) throw err;
     console.warn('findViralClips fell back to mock:', err);
-    return simulateMockViralClips();
+    return clampClipsToDuration(await simulateMockViralClips(videoDurationSecs), videoDurationSecs);
   }
+}
+
+// Clamp clip start/end times to actual video duration and scale them down if needed.
+function clampClipsToDuration(clips: ViralClipResult[], durationSecs?: number): ViralClipResult[] {
+  if (!durationSecs || durationSecs <= 0) return clips;
+  // If the clips' endTimes exceed the actual duration, scale them proportionally.
+  const maxEnd = Math.max(...clips.map(c => c.endTime));
+  if (maxEnd <= durationSecs) return clips;
+
+  const scale = durationSecs / maxEnd;
+  const segmentDuration = durationSecs / clips.length;
+
+  return clips.map((c, i) => {
+    const start = Math.max(0, Math.min(i * segmentDuration, durationSecs - 1));
+    const end   = Math.min((i + 1) * segmentDuration, durationSecs);
+    return {
+      ...c,
+      startTime: Math.round(start * 10) / 10,
+      endTime:   Math.round(end * 10) / 10,
+    };
+  });
+
+  void scale; // suppress unused warning
 }
 
 // ─── Step 3: Increment credit after successful pipeline ───────────────────────
@@ -122,7 +146,7 @@ async function simulateMockTranscription(): Promise<TranscriptResult> {
   return { text: SAMPLE, words: buildTimestampedWords(SAMPLE) };
 }
 
-async function simulateMockViralClips(): Promise<ViralClipResult[]> {
+async function simulateMockViralClips(_durationSecs?: number): Promise<ViralClipResult[]> {
   await delay(2200);
   return [
     {
