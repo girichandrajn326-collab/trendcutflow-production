@@ -9,7 +9,7 @@
         { "key": "Cross-Origin-Opener-Policy",   "value": "same-origin" },
         { "key": "Cross-Origin-Embedder-Policy",  "value": "credentialless" },
         { "key": "Cross-Origin-Resource-Policy",  "value": "cross-origin" },
-        { "key": "Content-Security-Policy", "value": "frame-src https://*.razorpay.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com;" }
+        { "key": "Content-Security-Policy", "value": "frame-src https://*.razorpay.com https://api.razorpay.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.razorpay.com; style-src 'self' 'unsafe-inline' https://*.razorpay.com https://fonts.googleapis.com; font-src 'self' data: https://*.razorpay.com https://fonts.gstatic.com; img-src 'self' data: https://*.razorpay.com; connect-src 'self' https://*.razorpay.com https://*.supabase.co;" }
       ]
     }
   ]
