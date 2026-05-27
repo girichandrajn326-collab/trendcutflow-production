@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Eye, EyeOff, TrendingUp, Zap, Mail, Lock, User, AlertCircle, ArrowRight, Loader2, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { Eye, EyeOff, TrendingUp, Zap, Mail, Lock, User, AlertCircle, ArrowRight, Loader2, CheckCircle2, ArrowLeft, MailCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface AuthScreenProps {
@@ -36,6 +36,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   const [nameError, setNameError]         = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [resetSent, setResetSent]         = useState(false);
+  const [verifyEmail, setVerifyEmail]     = useState<string | null>(null);
   // Only show "Welcome back" if the user has visited the sign-in page before.
   const [isReturning]                     = useState(() => getVisitCount() > 0);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -102,13 +103,18 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
         incrementVisitCount();
         onSuccess(email.split('@')[0]);
       } else {
-        const { error } = await signup(name.trim(), email.trim(), password);
+        const { error, emailConfirmationRequired } = await signup(name.trim(), email.trim(), password);
         if (error) {
           if (error.toLowerCase().includes('permanent') || error.toLowerCase().includes('temporary')) {
             setEmailError(error);
           } else {
             setGlobalError(error);
           }
+          return;
+        }
+        if (emailConfirmationRequired) {
+          // Supabase has email confirmation enabled — user must verify before signing in.
+          setVerifyEmail(email.trim());
           return;
         }
         incrementVisitCount();
@@ -140,8 +146,38 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
 
         <div className="bg-slate-900/80 backdrop-blur-xl border border-white/[0.08] rounded-2xl shadow-2xl shadow-black/60 overflow-hidden">
 
+          {/* ── Verify email state (after signup with confirmation enabled) ── */}
+          {verifyEmail ? (
+            <div className="p-6 space-y-5">
+              <div className="flex flex-col items-center text-center gap-3 py-2">
+                <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center">
+                  <MailCheck size={24} className="text-emerald-400" />
+                </div>
+                <div>
+                  <h2 className="text-white text-lg font-bold">Check your inbox</h2>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                    We sent a verification link to<br />
+                    <span className="text-white font-medium">{verifyEmail}</span>
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2.5 px-3.5 py-3 rounded-xl bg-sky-500/[0.07] border border-sky-500/20">
+                <AlertCircle size={14} className="text-sky-400 flex-shrink-0 mt-0.5" />
+                <p className="text-sky-300 text-[11px] leading-relaxed">
+                  Click the link in the email to activate your account, then come back here to sign in. Check your spam folder if you don't see it within a few minutes.
+                </p>
+              </div>
+              <button
+                onClick={() => { setVerifyEmail(null); setTab('signin'); setEmail(verifyEmail); }}
+                className="w-full py-2.5 rounded-xl border border-white/[0.08] text-slate-300 hover:text-white text-sm font-medium transition-colors"
+              >
+                Back to Sign In
+              </button>
+            </div>
+          ) : null}
+
           {/* Tab switcher */}
-          {tab !== 'forgot' && (
+          {!verifyEmail && tab !== 'forgot' && (
             <div className="flex border-b border-white/[0.06]">
               {(['signin', 'signup'] as AuthTab[]).map(t => (
                 <button
@@ -160,8 +196,8 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             </div>
           )}
 
-          {/* ── Forgot password ── */}
-          {tab === 'forgot' ? (
+          {/* ── Forgot password / Sign in / Sign up ── */}
+          {!verifyEmail && tab === 'forgot' ? (
             <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
               <button
                 type="button"
@@ -223,7 +259,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 </button>
               )}
             </form>
-          ) : (
+          ) : !verifyEmail ? (
             /* ── Sign in / Sign up ── */
             <form onSubmit={handleSubmit} noValidate className="p-6 space-y-4">
               <div className="mb-1">
@@ -339,7 +375,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 )}
               </p>
             </form>
-          )}
+          ) : null}
         </div>
 
         <p className="text-center text-[11px] text-slate-700 mt-5">

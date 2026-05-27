@@ -13,12 +13,6 @@ import HistoryScreen from './screens/HistoryScreen';
 import ProfileSettingsModal from './components/ProfileSettingsModal';
 import PreferencesModal from './components/PreferencesModal';
 
-// Detect Supabase password-reset redirect (hash contains type=recovery)
-function isPasswordResetFlow(): boolean {
-  const hash = window.location.hash;
-  return hash.includes('type=recovery') || hash.includes('type=email');
-}
-
 export default function App() {
   const app = useAppState();
   const { state } = app;
@@ -41,9 +35,10 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.screen]);
 
-  // Password reset redirect — show new-password form regardless of auth state
-  if (isPasswordResetFlow()) {
-    return <ResetPasswordScreen />;
+  // PASSWORD_RECOVERY event detected by onAuthStateChange — force new-password
+  // form before allowing any access to the app.
+  if (auth.needsPasswordReset) {
+    return <ResetPasswordScreen onDone={auth.clearPasswordResetFlag} />;
   }
 
   // Loading spinner while Supabase resolves session

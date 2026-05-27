@@ -15,13 +15,15 @@ export interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  needsPasswordReset: boolean;
 }
 
 export interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<{ error: string | null }>;
-  signup: (name: string, email: string, password: string) => Promise<{ error: string | null }>;
+  signup: (name: string, email: string, password: string) => Promise<{ error: string | null; emailConfirmationRequired?: boolean }>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: string | null }>;
+  clearPasswordResetFlag: () => void;
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────
@@ -41,31 +43,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user: null,
     isAuthenticated: false,
     isLoading: true,
+    needsPasswordReset: false,
   });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      hydrateFromSession(session);
+      hydrateFromSession('INITIAL_SESSION', session);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      hydrateFromSession(session);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      hydrateFromSession(event, session);
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  function hydrateFromSession(session: Session | null) {
+  function hydrateFromSession(event: string, session: Session | null) {
+    // When Supabase processes a password-reset link it fires PASSWORD_RECOVERY.
+    // Hold the app in a "must set new password" state until the user submits.
+    if (event === 'PASSWORD_RECOVERY') {
+      setAuthState({
+        user: session?.user ? supabaseUserToAuthUser(session.user) : null,
+        isAuthenticated: false, // block normal app access
+        isLoading: false,
+        needsPasswordReset: true,
+      });
+      return;
+    }
+
     if (session?.user) {
       setAuthState({
         user: supabaseUserToAuthUser(session.user),
         isAuthenticated: true,
         isLoading: false,
+        needsPasswordReset: false,
       });
     } else {
-      setAuthState({ user: null, isAuthenticated: false, isLoading: false });
+      setAuthState({ user: null, isAuthenticated: false, isLoading: false, needsPasswordReset: false });
     }
   }
+
+  const clearPasswordResetFlag = useCallback(() => {
+    setAuthState(s => ({ ...s, needsPasswordReset: false }));
+  }, []);
 
   const login = useCallback(async (email: string, password: string): Promise<{ error: string | null }> => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -98,6 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: error.message };
     }
 
+    // When email confirmation is enabled, session is null until the user
+    // clicks the verification link. Signal this to the UI so it can show
+    // a "check your inbox" state instead of trying to enter the app.
+    if (!data.session) {
+      return { error: null, emailConfirmationRequired: true };
+    }
+
     // Profile row is created automatically by the handle_new_user trigger.
     return { error: null };
   }, []);
@@ -109,14 +136,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resetPassword = useCallback(async (email: string): Promise<{ error: string | null }> => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}`,
+      // redirectTo must point back to the app origin so the hash fragment
+      // with type=recovery is processed by our onAuthStateChange listener.
+      redirectTo: window.location.origin,
     });
     if (error) return { error: error.message };
     return { error: null };
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ...authState, login, signup, logout, resetPassword }}>
+    <AuthContext.Provider value={{ ...authState, login, signup, logout, resetPassword, clearPasswordResetFlag }}>
       {children}
     </AuthContext.Provider>
   );

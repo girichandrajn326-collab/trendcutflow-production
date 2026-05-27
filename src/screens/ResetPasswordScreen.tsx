@@ -1,19 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { TrendingUp, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2, ArrowRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
-export default function ResetPasswordScreen() {
+interface ResetPasswordScreenProps {
+  onDone?: () => void;
+}
+
+export default function ResetPasswordScreen({ onDone }: ResetPasswordScreenProps) {
   const [password, setPassword]         = useState('');
   const [confirm, setConfirm]           = useState('');
   const [showPw, setShowPw]             = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError]               = useState<string | null>(null);
   const [done, setDone]                 = useState(false);
-
-  // Supabase sends the user back with a hash fragment — exchange it for a session
-  useEffect(() => {
-    supabase.auth.getSession(); // triggers PKCE exchange from URL hash automatically
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,10 +35,12 @@ export default function ResetPasswordScreen() {
         return;
       }
       setDone(true);
-      // Redirect to app after short delay
+      // Clear the recovery hash from the URL so isPasswordResetFlow won't re-trigger,
+      // then hand control back to the app via onDone after a brief success delay.
+      window.history.replaceState(null, '', window.location.pathname);
       setTimeout(() => {
-        window.location.href = '/';
-      }, 2500);
+        onDone?.();
+      }, 2000);
     } finally {
       setIsSubmitting(false);
     }
