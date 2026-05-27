@@ -197,6 +197,12 @@ export default function UpgradeModal({
     // Only open real Razorpay checkout when key starts with "rzp_"
     const keyIsValid = typeof razorpayKey === 'string' && razorpayKey.startsWith('rzp_');
 
+    if (!keyIsValid) {
+      setGateway(null);
+      alert('Payment gateway is not configured. Please contact support to complete your purchase.');
+      return;
+    }
+
     if (typeof Razorpay === 'function' && keyIsValid) {
       const planKeyMap: Partial<Record<PlanTier, string>> = {
         creator: 'plan_creator',
@@ -229,9 +235,6 @@ export default function UpgradeModal({
         },
       });
       rzp.open();
-    } else {
-      // Simulation path: no valid Razorpay key configured
-      await onPurchasePlan(planId);
     }
   }
 

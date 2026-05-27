@@ -130,9 +130,10 @@ export async function revokeOAuthToken(userId: string, provider: 'youtube' | 'go
 // Initiate YouTube OAuth flow — opens Google consent screen in a popup
 export function initiateYouTubeOAuth(userId: string): void {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-  const callbackUrl = `${supabaseUrl}/functions/v1/youtube-oauth?action=callback&user_id=${userId}`;
+  const callbackUrl = `${supabaseUrl}/functions/v1/youtube-oauth?action=callback`;
   const params = new URLSearchParams({
     action: 'authorize',
+    user_id: userId,
     redirect_uri: callbackUrl,
   });
   const authUrl = `${supabaseUrl}/functions/v1/youtube-oauth?${params}`;

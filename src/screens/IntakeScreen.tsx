@@ -34,9 +34,9 @@ export default function IntakeScreen({
   const totalCredits = user.totalCredits;
   const noCredits    = creditsUsed >= totalCredits;
 
-  const urlSource    = inputUrl ? detectUrlSource(inputUrl) : null;
-  const isYouTubeUrl = urlSource === 'youtube';
-  const hasInput     = !!uploadedFile || (inputUrl.trim().length > 0 && urlSource !== null && !isYouTubeUrl);
+  const urlSource        = inputUrl ? detectUrlSource(inputUrl) : null;
+  const isUnsupportedUrl = urlSource !== null;
+  const hasInput         = !!uploadedFile;
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -183,26 +183,29 @@ export default function IntakeScreen({
           )}
         </div>
 
-        {/* YouTube URL warning */}
-        {isYouTubeUrl && (
+        {/* Unsupported URL warning */}
+        {isUnsupportedUrl && (
           <div className="mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-amber-500/[0.08] border border-amber-500/20">
             <AlertCircle size={15} className="text-amber-400 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-amber-200 text-xs font-semibold">YouTube URLs cannot be processed directly</p>
+              <p className="text-amber-200 text-xs font-semibold">
+                {urlSource === 'youtube' ? 'YouTube' : urlSource === 'twitch' ? 'Twitch' : 'Zoom'} URLs cannot be processed directly
+              </p>
               <p className="text-amber-400/70 text-[11px] mt-0.5 leading-snug">
-                Browsers cannot download YouTube video files due to platform restrictions.
-                Download the video first (e.g. via yt-dlp or a download tool) and upload the MP4 file above.
+                Browsers cannot download video files from streaming platforms due to platform restrictions.
+                Download the video first and upload the MP4 file above.
               </p>
             </div>
           </div>
         )}
 
-        {/* Supported platforms */}
-        {!isYouTubeUrl && (
+        {/* Supported formats note */}
+        {!isUnsupportedUrl && (
           <div className="flex items-center justify-center gap-4 mt-3 text-xs text-slate-600">
-            <span className="flex items-center gap-1"><Youtube size={12} className="text-red-500/60" /> YouTube*</span>
+            <span className="flex items-center gap-1"><Youtube size={12} className="text-red-500/60" /> YouTube</span>
             <span className="flex items-center gap-1"><Tv size={12} className="text-sky-500/60" /> Twitch</span>
             <span className="flex items-center gap-1"><Video size={12} className="text-blue-500/60" /> Zoom</span>
+            <span className="text-slate-700">— download first, then upload</span>
           </div>
         )}
 

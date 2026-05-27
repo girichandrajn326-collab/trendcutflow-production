@@ -18,6 +18,7 @@ function getStyleSeedVariation(seed: number): CSSProperties {
 import { calculateSchedule, formatScheduledTime, formatScheduledShort, executePublish } from '../lib/publishQueue';
 import { trimVideoClip } from '../lib/videoProcessor';
 import { burnSubtitles } from '../lib/ffmpegClient';
+import { renderClipWithSubtitles } from '../lib/canvasRenderer';
 import { initiateYouTubeOAuth } from '../lib/oauthManager';
 import { supabase } from '../lib/supabase';
 
@@ -213,34 +214,23 @@ export default function EditorScreen({
   }, []);
 
   const handleExport = useCallback(async () => {
+    const uploadedFile = state.uploadedFile;
+    if (!uploadedFile) {
+      alert('Export requires the original video file. Please go back and re-upload it.');
+      return;
+    }
     setExporting(true);
     try {
-      const uploadedFile = state.uploadedFile;
-      const safeName = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`;
+      const safeName = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.webm`;
 
-      // Get or produce a trimmed blob
-      let blob: Blob | null = null;
-      let existingBlobUrl = clipBlobUrls[clip.id];
-
-      if (!existingBlobUrl && uploadedFile) {
-        existingBlobUrl = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
-        setClipBlobUrls(prev => ({ ...prev, [clip.id]: existingBlobUrl }));
-      }
-
-      if (existingBlobUrl) {
-        const res = await fetch(existingBlobUrl);
-        blob = await res.blob();
-      }
-
-      // Try to burn subtitles on top
-      if (blob) {
-        const burned = await burnSubtitles(blob, {
-          words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
-          style: state.subtitlePreset,
-          styleSeed: state.randomStyleSeed,
-        });
-        if (burned) blob = burned;
-      }
+      // Canvas renderer: trims to 9:16, burns subtitles, works without FFmpeg/COEP headers
+      const blob = await renderClipWithSubtitles(uploadedFile, {
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+        style: state.subtitlePreset,
+        styleSeed: state.randomStyleSeed,
+      });
 
       if (blob) {
         const url = URL.createObjectURL(blob);
@@ -248,12 +238,30 @@ export default function EditorScreen({
         a.href = url;
         a.download = safeName;
         a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        setTimeout(() => URL.revokeObjectURL(url), 8000);
         return;
       }
 
-      // No video blob available — the original file is needed for export
-      alert('Export requires the original video file. Please go back to the upload screen and re-upload the file to enable trimmed clip downloads.');
+      // Canvas render failed — try FFmpeg path (requires COEP headers)
+      let blobUrl = clipBlobUrls[clip.id];
+      if (!blobUrl) {
+        blobUrl = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
+        setClipBlobUrls(prev => ({ ...prev, [clip.id]: blobUrl }));
+      }
+      const rawRes = await fetch(blobUrl);
+      const rawBlob = await rawRes.blob();
+      const burned = await burnSubtitles(rawBlob, {
+        words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+        style: state.subtitlePreset,
+        styleSeed: state.randomStyleSeed,
+      });
+      const finalBlob = burned ?? rawBlob;
+      const url = URL.createObjectURL(finalBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safeName.replace('.webm', '.mp4');
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
     } catch (err) {
       console.error('Export failed:', err);
       alert('Export failed. Please try again.');

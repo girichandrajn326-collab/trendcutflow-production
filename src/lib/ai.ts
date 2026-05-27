@@ -58,13 +58,16 @@ export async function transcribeVideo(videoFile: File | string): Promise<Transcr
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
-      console.warn('Transcription edge fn error, using mock:', err);
-      return simulateMockTranscription();
+      if (res.status === 404) throw new Error('User profile not found. Please sign out and sign in again.');
+      // Surface real server errors so users know what's wrong
+      throw new Error(err.error ?? `Transcription failed (${res.status}). Please try again.`);
     }
 
     return await res.json();
   } catch (err) {
     if (err instanceof Error && err.message.toLowerCase().includes('credit')) throw err;
+    if (err instanceof Error && err.message.toLowerCase().includes('profile')) throw err;
+    if (err instanceof Error && err.message.toLowerCase().includes('failed')) throw err;
     console.warn('transcribeVideo fell back to mock:', err);
     return simulateMockTranscription();
   }
@@ -86,15 +89,29 @@ export async function findViralClips(transcriptText: string, videoDurationSecs?:
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
-      console.warn('Detect-clips edge fn error, using mock:', err);
-      return simulateMockViralClips();
+      if (res.status === 404) throw new Error('User profile not found. Please sign out and sign in again.');
+      throw new Error(err.error ?? `Clip detection failed (${res.status}). Please try again.`);
     }
 
     const data = await res.json();
-    const clips = Array.isArray(data) ? data.slice(0, 5) : await simulateMockViralClips(videoDurationSecs);
+    // GPT returns either a bare array or { clips: [...] } / { segments: [...] }
+    const clips = Array.isArray(data)
+      ? data.slice(0, 5)
+      : Array.isArray(data.clips) ? data.clips.slice(0, 5)
+      : Array.isArray(data.segments) ? data.segments.slice(0, 5)
+      : (Array.isArray(Object.values(data)[0]) ? (Object.values(data)[0] as ViralClipResult[]).slice(0, 5) : null);
+
+    if (!clips) {
+      console.warn('Unexpected detect-clips response shape, using mock:', data);
+      return clampClipsToDuration(await simulateMockViralClips(videoDurationSecs), videoDurationSecs);
+    }
     return clampClipsToDuration(clips, videoDurationSecs);
   } catch (err) {
-    if (err instanceof Error && err.message.toLowerCase().includes('credit')) throw err;
+    if (err instanceof Error && (
+      err.message.toLowerCase().includes('credit') ||
+      err.message.toLowerCase().includes('profile') ||
+      err.message.toLowerCase().includes('failed')
+    )) throw err;
     console.warn('findViralClips fell back to mock:', err);
     return clampClipsToDuration(await simulateMockViralClips(videoDurationSecs), videoDurationSecs);
   }
