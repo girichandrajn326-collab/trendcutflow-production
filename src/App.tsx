@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAppState } from './store/appStore';
 import { useAuth } from './context/AuthContext';
 import Header from './components/Header';
+import Footer from './components/Footer';
 import UpgradeModal from './components/UpgradeModal';
 import { ToastStack } from './components/Toast';
 import IntakeScreen from './screens/IntakeScreen';
@@ -12,6 +13,12 @@ import ResetPasswordScreen from './screens/ResetPasswordScreen';
 import HistoryScreen from './screens/HistoryScreen';
 import ProfileSettingsModal from './components/ProfileSettingsModal';
 import PreferencesModal from './components/PreferencesModal';
+import TermsPage from './screens/legal/TermsPage';
+import PrivacyPage from './screens/legal/PrivacyPage';
+import RefundPage from './screens/legal/RefundPage';
+import ContactPage from './screens/legal/ContactPage';
+
+type LegalPage = 'terms' | 'privacy' | 'refund' | 'contact' | null;
 
 export default function App() {
   const app = useAppState();
@@ -19,11 +26,10 @@ export default function App() {
   const auth = useAuth();
   const [showProfile, setShowProfile]         = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
+  const [legalPage, setLegalPage]             = useState<LegalPage>(null);
 
   useEffect(() => {
     app.setAuthUser(auth.user);
-    // Always land on intake when auth state resolves so stale editor/processing
-    // screens from a previous session don't persist across browser reloads.
     if (auth.user) {
       app.setScreen('intake');
     }
@@ -35,13 +41,18 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.screen]);
 
-  // PASSWORD_RECOVERY event detected by onAuthStateChange — force new-password
-  // form before allowing any access to the app.
+  // Legal pages are publicly accessible — no auth required
+  if (legalPage === 'terms')   return <TermsPage   onBack={() => setLegalPage(null)} />;
+  if (legalPage === 'privacy') return <PrivacyPage onBack={() => setLegalPage(null)} />;
+  if (legalPage === 'refund')  return <RefundPage  onBack={() => setLegalPage(null)} />;
+  if (legalPage === 'contact') return <ContactPage onBack={() => setLegalPage(null)} />;
+
+  const openLegal = (page: string) => setLegalPage(page as LegalPage);
+
   if (auth.needsPasswordReset) {
     return <ResetPasswordScreen onDone={auth.clearPasswordResetFlag} />;
   }
 
-  // Loading spinner while Supabase resolves session
   if (auth.isLoading) {
     return (
       <div className="min-h-screen bg-[#0B0F17] flex items-center justify-center">
@@ -53,11 +64,10 @@ export default function App() {
     );
   }
 
-  // Auth gate
   if (!auth.isAuthenticated) {
     return (
-      <>
-        <div className="min-h-screen bg-[#0B0F17] text-white font-sans select-none pointer-events-none">
+      <div className="min-h-screen bg-[#0B0F17] flex flex-col">
+        <div className="flex-1 relative text-white font-sans select-none pointer-events-none">
           <div className="filter blur-md opacity-30 saturate-50">
             <Header
               state={state}
@@ -78,6 +88,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        <Footer onNavigate={openLegal} />
         <AuthScreen
           onSuccess={(name) => {
             app.addToast({
@@ -88,12 +99,12 @@ export default function App() {
             app.setScreen('intake');
           }}
         />
-      </>
+      </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-white font-sans">
+    <div className="min-h-screen bg-[#0B0F17] text-white font-sans flex flex-col">
       <Header
         state={state}
         onOpenUpgradeModal={app.openUpgradeModal}
@@ -105,37 +116,40 @@ export default function App() {
         onOpenProfile={() => { app.closeAccountDropdown(); setShowProfile(true); }}
         onOpenPreferences={() => { app.closeAccountDropdown(); setShowPreferences(true); }}
       />
-      {state.screen === 'intake' && (
-        <IntakeScreen
-          state={state}
-          onGenerate={app.runPipeline}
-          onSetUrl={app.setInputUrl}
-          onSetDragging={app.setIsDragging}
-          onSetFile={app.setUploadedFile}
-          onOpenUpgrade={app.openUpgradeModal}
-        />
-      )}
-      {state.screen === 'processing' && (
-        <ProcessingScreen
-          pipeline={state.pipeline}
-          pipelineError={state.pipelineError}
-          onGoBack={() => app.setScreen('intake')}
-        />
-      )}
-      {state.screen === 'history' && (
-        <HistoryScreen user={state.user} />
-      )}
-      {state.screen === 'editor' && (
-        <EditorScreen
-          state={state}
-          onSetClip={app.setActiveClipIndex}
-          onSetPreset={app.setSubtitlePreset}
-          onSetActiveWord={app.setActiveWordIndex}
-          onAddToQueue={app.addToPublishQueue}
-          onRemoveFromQueue={app.removeFromPublishQueue}
-          onUpdateTitle={app.updateMetadataTitle}
-        />
-      )}
+      <div className="flex-1">
+        {state.screen === 'intake' && (
+          <IntakeScreen
+            state={state}
+            onGenerate={app.runPipeline}
+            onSetUrl={app.setInputUrl}
+            onSetDragging={app.setIsDragging}
+            onSetFile={app.setUploadedFile}
+            onOpenUpgrade={app.openUpgradeModal}
+          />
+        )}
+        {state.screen === 'processing' && (
+          <ProcessingScreen
+            pipeline={state.pipeline}
+            pipelineError={state.pipelineError}
+            onGoBack={() => app.setScreen('intake')}
+          />
+        )}
+        {state.screen === 'history' && (
+          <HistoryScreen user={state.user} />
+        )}
+        {state.screen === 'editor' && (
+          <EditorScreen
+            state={state}
+            onSetClip={app.setActiveClipIndex}
+            onSetPreset={app.setSubtitlePreset}
+            onSetActiveWord={app.setActiveWordIndex}
+            onAddToQueue={app.addToPublishQueue}
+            onRemoveFromQueue={app.removeFromPublishQueue}
+            onUpdateTitle={app.updateMetadataTitle}
+          />
+        )}
+      </div>
+      <Footer onNavigate={openLegal} />
       {state.isUpgradeModalOpen && (
         <UpgradeModal
           currentPlan={state.user.plan}
@@ -143,7 +157,6 @@ export default function App() {
           onSelectPlan={app.selectPlan}
           onPurchasePlan={async (plan) => {
             app.purchasePlan(plan);
-            // Re-sync credits from DB after purchase
             app.setAuthUser(auth.user);
           }}
           userId={state.user.id}
