@@ -47,10 +47,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      hydrateFromSession('INITIAL_SESSION', session);
-    });
-
+    // Use onAuthStateChange exclusively. Supabase v2 fires INITIAL_SESSION first,
+    // then PASSWORD_RECOVERY (if a recovery link was clicked). Registering the
+    // listener first — before any getSession() call — guarantees the events arrive
+    // in the correct order without a race condition overwriting needsPasswordReset.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       hydrateFromSession(event, session);
     });
@@ -59,38 +59,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   function hydrateFromSession(event: string, session: Session | null) {
-    // When Supabase processes a password-reset link it fires PASSWORD_RECOVERY.
-    // Hold the app in a "must set new password" state until the user submits.
     if (event === 'PASSWORD_RECOVERY') {
       setAuthState({
         user: session?.user ? supabaseUserToAuthUser(session.user) : null,
-        isAuthenticated: false, // block normal app access
+        isAuthenticated: false,
         isLoading: false,
         needsPasswordReset: true,
       });
       return;
     }
 
-    if (session?.user) {
-      setAuthState({
-        user: supabaseUserToAuthUser(session.user),
-        isAuthenticated: true,
-        isLoading: false,
-        needsPasswordReset: false,
-      });
-    } else {
+    if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+      if (session?.user) {
+        setAuthState({
+          user: supabaseUserToAuthUser(session.user),
+          isAuthenticated: true,
+          isLoading: false,
+          needsPasswordReset: false,
+        });
+      } else {
+        setAuthState({ user: null, isAuthenticated: false, isLoading: false, needsPasswordReset: false });
+      }
+      return;
+    }
+
+    if (event === 'SIGNED_OUT') {
       setAuthState({ user: null, isAuthenticated: false, isLoading: false, needsPasswordReset: false });
     }
   }
 
   const clearPasswordResetFlag = useCallback(() => {
-    setAuthState(s => ({ ...s, needsPasswordReset: false }));
+    setAuthState(s => ({ ...s, needsPasswordReset: false, isAuthenticated: true }));
   }, []);
 
   const login = useCallback(async (email: string, password: string): Promise<{ error: string | null }> => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       const msg = error.message.toLowerCase();
+      if (msg.includes('email not confirmed')) {
+        return { error: 'Please confirm your email address before signing in. Check your inbox for the confirmation link.' };
+      }
       if (msg.includes('invalid login') || msg.includes('credentials') || msg.includes('invalid')) {
         return { error: 'Incorrect email or password. Please try again.' };
       }
@@ -99,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }, []);
 
-  const signup = useCallback(async (name: string, email: string, password: string): Promise<{ error: string | null }> => {
+  const signup = useCallback(async (name: string, email: string, password: string): Promise<{ error: string | null; emailConfirmationRequired?: boolean }> => {
     if (isDisposableEmail(email)) {
       return { error: 'Please use a permanent business or personal email address to claim your free video credits.' };
     }
@@ -118,27 +126,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return { error: error.message };
     }
 
-    // When email confirmation is enabled, session is null until the user
-    // clicks the verification link. Signal this to the UI so it can show
-    // a "check your inbox" state instead of trying to enter the app.
+    // Email confirmation enabled in Supabase — session is null until user clicks link.
     if (!data.session) {
       return { error: null, emailConfirmationRequired: true };
     }
 
-    // Profile row is created automatically by the handle_new_user trigger.
     return { error: null };
   }, []);
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
-    setAuthState({ user: null, isAuthenticated: false, isLoading: false });
   }, []);
 
   const resetPassword = useCallback(async (email: string): Promise<{ error: string | null }> => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      // redirectTo must point back to the app origin so the hash fragment
-      // with type=recovery is processed by our onAuthStateChange listener.
-      redirectTo: window.location.origin,
+      redirectTo: `${window.location.origin}/`,
     });
     if (error) return { error: error.message };
     return { error: null };
