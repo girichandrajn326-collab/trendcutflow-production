@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Upload, Link, Youtube, Tv, Video, Sparkles, AlertCircle, ArrowRight, Zap } from 'lucide-react';
+import { Upload, Link, Youtube, Instagram, Video, Sparkles, AlertCircle, ArrowRight, Zap, Download } from 'lucide-react';
 import type { AppState } from '../store/appStore';
 
 interface IntakeScreenProps {
@@ -11,10 +11,11 @@ interface IntakeScreenProps {
   onOpenUpgrade: () => void;
 }
 
-function detectUrlSource(url: string): 'youtube' | 'twitch' | 'zoom' | null {
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
-  if (/twitch\.tv/i.test(url)) return 'twitch';
-  if (/zoom\.us/i.test(url)) return 'zoom';
+type UrlSource = 'youtube' | 'instagram' | null;
+
+function detectUrlSource(url: string): UrlSource {
+  if (/youtube\.com|youtu\.be/i.test(url))  return 'youtube';
+  if (/instagram\.com/i.test(url))           return 'instagram';
   return null;
 }
 
@@ -29,14 +30,14 @@ export default function IntakeScreen({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { inputUrl, isDragging, uploadedFile, user } = state;
 
-  // Use totalCredits from user object (set per plan) to enforce limit
   const creditsUsed  = user.videosProcessed;
   const totalCredits = user.totalCredits;
   const noCredits    = creditsUsed >= totalCredits;
 
-  const urlSource        = inputUrl ? detectUrlSource(inputUrl) : null;
-  const isUnsupportedUrl = urlSource !== null;
-  const hasInput         = !!uploadedFile;
+  const urlSource    = inputUrl ? detectUrlSource(inputUrl) : null;
+  // Both YouTube and Instagram are valid inputs (server-side download will handle them)
+  const hasUrlInput  = urlSource !== null;
+  const hasInput     = !!uploadedFile || hasUrlInput;
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -50,10 +51,15 @@ export default function IntakeScreen({
     if (file) onSetFile(file);
   }
 
-  const UrlIcon = urlSource === 'youtube' ? Youtube
-    : urlSource === 'twitch' ? Tv
-    : urlSource === 'zoom'   ? Video
+  const UrlIcon = urlSource === 'youtube'   ? Youtube
+    : urlSource === 'instagram' ? Instagram
     : Link;
+
+  const urlBadgeStyle = urlSource === 'youtube'
+    ? 'bg-red-500/20 text-red-400'
+    : urlSource === 'instagram'
+    ? 'bg-pink-500/20 text-pink-400'
+    : '';
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 pt-16 pb-12">
@@ -76,7 +82,7 @@ export default function IntakeScreen({
             </span>
           </h1>
           <p className="text-slate-400 text-base mt-3 leading-relaxed">
-            Drop a raw video or paste a URL. Our AI extracts the 5 most viral 9:16 clips — subtitled, titled, and ready to post.
+            Drop a raw video or paste a YouTube / Instagram URL. Our AI extracts the 5 most viral 9:16 clips — subtitled, titled, and ready to post.
           </p>
         </div>
 
@@ -106,7 +112,6 @@ export default function IntakeScreen({
           />
           <div className="px-8 py-12 flex flex-col items-center text-center">
             {noCredits ? (
-              // Credit exhausted state inside drop zone
               <div className="flex flex-col items-center gap-3 opacity-40 select-none">
                 <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
                   <Upload size={22} className="text-red-400/50" />
@@ -166,50 +171,48 @@ export default function IntakeScreen({
             type="url"
             value={inputUrl}
             onChange={(e) => onSetUrl(e.target.value)}
-            placeholder="Paste YouTube, Twitch, or Zoom URL..."
+            placeholder="Paste YouTube or Instagram URL..."
             disabled={noCredits}
             className="w-full pl-11 pr-4 py-3.5 rounded-xl bg-slate-800/60 border border-white/[0.08] focus:border-sky-500/50 focus:outline-none focus:ring-2 focus:ring-sky-500/20 text-white placeholder-slate-500 text-sm transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
           />
           {urlSource && !noCredits && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
-              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                urlSource === 'youtube' ? 'bg-red-500/20 text-red-400' :
-                urlSource === 'twitch'  ? 'bg-sky-500/20 text-sky-400' :
-                'bg-blue-500/20 text-blue-400'
-              }`}>
+              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${urlBadgeStyle}`}>
                 {urlSource}
               </span>
             </div>
           )}
         </div>
 
-        {/* Unsupported URL warning */}
-        {isUnsupportedUrl && (
-          <div className="mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-amber-500/[0.08] border border-amber-500/20">
-            <AlertCircle size={15} className="text-amber-400 flex-shrink-0 mt-0.5" />
+        {/* URL processing info — shown when YouTube or Instagram URL is pasted */}
+        {hasUrlInput && !noCredits && (
+          <div className="mt-3 flex items-start gap-3 p-3.5 rounded-xl bg-sky-500/[0.07] border border-sky-500/20">
+            <Download size={14} className="text-sky-400 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-amber-200 text-xs font-semibold">
-                {urlSource === 'youtube' ? 'YouTube' : urlSource === 'twitch' ? 'Twitch' : 'Zoom'} URLs cannot be processed directly
+              <p className="text-sky-200 text-xs font-semibold">
+                {urlSource === 'youtube' ? 'YouTube' : 'Instagram'} URL detected — server-side download ready
               </p>
-              <p className="text-amber-400/70 text-[11px] mt-0.5 leading-snug">
-                Browsers cannot download video files from streaming platforms due to platform restrictions.
-                Download the video first and upload the MP4 file above.
+              <p className="text-sky-400/70 text-[11px] mt-0.5 leading-snug">
+                Click "Generate Viral Shorts" to start. The video will be downloaded securely on our servers, then processed through the AI pipeline.
               </p>
             </div>
           </div>
         )}
 
-        {/* Supported formats note */}
-        {!isUnsupportedUrl && (
-          <div className="flex items-center justify-center gap-4 mt-3 text-xs text-slate-600">
-            <span className="flex items-center gap-1"><Youtube size={12} className="text-red-500/60" /> YouTube</span>
-            <span className="flex items-center gap-1"><Tv size={12} className="text-sky-500/60" /> Twitch</span>
-            <span className="flex items-center gap-1"><Video size={12} className="text-blue-500/60" /> Zoom</span>
-            <span className="text-slate-700">— download first, then upload</span>
+        {/* Supported platforms note */}
+        {!hasUrlInput && (
+          <div className="flex items-center justify-center gap-5 mt-3 text-xs text-slate-600">
+            <span className="flex items-center gap-1.5">
+              <Youtube size={12} className="text-red-500/60" /> YouTube
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Instagram size={12} className="text-pink-500/60" /> Instagram
+            </span>
+            <span className="text-slate-700">— or upload an MP4/MOV directly</span>
           </div>
         )}
 
-        {/* ── Credit limit warning banner ── */}
+        {/* Credit limit warning banner */}
         {noCredits && (
           <div className="mt-5 flex items-start gap-4 p-4 rounded-xl bg-red-500/[0.07] border border-red-500/25 shadow-[0_0_20px_rgba(239,68,68,0.08)]">
             <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/25 flex items-center justify-center flex-shrink-0">
@@ -234,9 +237,8 @@ export default function IntakeScreen({
           </div>
         )}
 
-        {/* ── Primary CTA ── */}
+        {/* Primary CTA */}
         {noCredits ? (
-          // Full-width upgrade button replaces generate when no credits
           <button
             onClick={onOpenUpgrade}
             className="relative w-full mt-5 py-4 rounded-xl text-base font-bold transition-all duration-300 flex items-center justify-center gap-2 overflow-hidden group bg-gradient-to-r from-sky-600 to-cyan-500 text-white hover:from-sky-500 hover:to-cyan-400 shadow-lg shadow-sky-900/30"
@@ -267,7 +269,7 @@ export default function IntakeScreen({
 
         {hasInput && !noCredits && (
           <p className="text-center text-xs text-slate-600 mt-2">
-            Processes 5 viral clips · Browser-side · No upload needed
+            {hasUrlInput ? 'Server-side download + AI processing' : 'Browser-side processing · No upload needed'} · 5 viral clips
             <span className="ml-2 text-sky-600 font-medium">
               {creditsUsed}/{totalCredits} credits used
             </span>

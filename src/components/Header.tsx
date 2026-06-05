@@ -82,6 +82,29 @@ export default function Header({
             History
           </button>
 
+          {/* Real-time credit counter pill */}
+          {(() => {
+            const remaining = user.credits ?? Math.max(user.totalCredits - user.videosProcessed, 0);
+            const isLow     = remaining <= 1;
+            const isEmpty   = remaining === 0;
+            return (
+              <button
+                onClick={onOpenUpgradeModal}
+                title={`${remaining} credit${remaining !== 1 ? 's' : ''} remaining`}
+                className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-300 ${
+                  isEmpty
+                    ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:border-red-500/60'
+                    : isLow
+                    ? 'bg-amber-500/10 border-amber-500/25 text-amber-400 hover:border-amber-500/50'
+                    : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:border-white/[0.15]'
+                }`}
+              >
+                <Zap size={11} className={isEmpty ? 'text-red-400' : isLow ? 'text-amber-400' : 'text-slate-500'} />
+                <span>{remaining}<span className="text-current/50">/{user.totalCredits}</span></span>
+              </button>
+            );
+          })()}
+
           {/* Upgrade button */}
           {user.plan !== 'pro' && (
             <button

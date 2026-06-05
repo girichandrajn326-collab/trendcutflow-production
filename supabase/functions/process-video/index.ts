@@ -1,6 +1,7 @@
 // Edge Function: process-video
 // Proxies AI calls (Groq Whisper transcription + OpenAI viral clip detection)
-// keeping API keys server-side. Enforces credits via DB RPCs before running.
+// keeping API keys server-side. Enforces credits via DB RPCs. Logs every step
+// to processing_logs for full pipeline observability.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -10,8 +11,48 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+const GROQ_API_URL   = "https://api.groq.com/openai/v1/audio/transcriptions";
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+
+// ─── Logging helpers ──────────────────────────────────────────────────────────
+
+type LogStatus = "pending" | "success" | "error";
+
+async function insertLog(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  step: string,
+  status: LogStatus,
+  message?: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("processing_logs")
+    .insert({ user_id: userId, step, status, message: message ?? null })
+    .select("id")
+    .maybeSingle();
+  if (error) console.error("insertLog failed:", error.message);
+  return data?.id ?? null;
+}
+
+async function updateLog(
+  supabase: ReturnType<typeof createClient>,
+  logId: string | null,
+  status: LogStatus,
+  message?: string,
+  errorCode?: string,
+  durationMs?: number,
+) {
+  if (!logId) return;
+  await supabase.from("processing_logs").update({
+    status,
+    message:     message     ?? null,
+    error_code:  errorCode   ?? null,
+    duration_ms: durationMs  ?? null,
+    updated_at:  new Date().toISOString(),
+  }).eq("id", logId);
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -20,9 +61,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return json({ error: "Missing Authorization header" }, 401);
-    }
+    if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -32,76 +71,93 @@ Deno.serve(async (req: Request) => {
     const { data: { user }, error: authError } = await supabase.auth.getUser(
       authHeader.replace("Bearer ", ""),
     );
-    if (authError || !user) {
-      return json({ error: "Unauthorized" }, 401);
-    }
+    if (authError || !user) return json({ error: "Unauthorized" }, 401);
 
     // ── Credit guard (RPC) ────────────────────────────────────────────────────
     const { data: canProcess, error: guardError } = await supabase
       .rpc("can_process_video", { uid: user.id });
 
-    if (guardError) {
-      return json({ error: "Credit check failed: " + guardError.message }, 500);
-    }
-    if (!canProcess) {
-      return json({ error: "Credit limit reached. Please upgrade your plan." }, 402);
-    }
+    if (guardError) return json({ error: "Credit check failed: " + guardError.message }, 500);
+    if (!canProcess) return json({ error: "Credit limit reached. Please upgrade your plan." }, 402);
 
-    const url = new URL(req.url);
+    const url    = new URL(req.url);
     const action = url.searchParams.get("action");
 
     // ── Route: transcribe ─────────────────────────────────────────────────────
     if (action === "transcribe") {
-      const GROQ_KEY = Deno.env.get("GROQ_API_KEY");
-      if (!GROQ_KEY) {
-        return json(buildMockTranscript());
+      const logId = await insertLog(supabase, user.id, "transcribe", "pending");
+      const start = Date.now();
+
+      try {
+        const GROQ_KEY = Deno.env.get("GROQ_API_KEY");
+        if (!GROQ_KEY) {
+          await updateLog(supabase, logId, "success", "mock response (no GROQ_API_KEY)", undefined, 0);
+          return json(buildMockTranscript());
+        }
+
+        const formData  = await req.formData();
+        const audioFile = formData.get("file") as File | null;
+        if (!audioFile) {
+          await updateLog(supabase, logId, "error", "No file provided", "MISSING_FILE");
+          return json({ error: "No file provided" }, 400);
+        }
+
+        const groqForm = new FormData();
+        groqForm.append("file", audioFile, audioFile.name || "audio.mp4");
+        groqForm.append("model", "whisper-large-v3");
+        groqForm.append("response_format", "verbose_json");
+        groqForm.append("timestamp_granularities[]", "word");
+
+        const groqRes = await fetch(GROQ_API_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${GROQ_KEY}` },
+          body: groqForm,
+        });
+
+        if (!groqRes.ok) {
+          const err = await groqRes.text();
+          const code = String(groqRes.status);
+          await updateLog(supabase, logId, "error", `Groq error: ${err}`, code, Date.now() - start);
+          return json({ error: `Groq error: ${err}` }, 502);
+        }
+
+        const data  = await groqRes.json();
+        const words = (data.words ?? []).map(
+          (w: { word: string; start: number; end: number }, i: number) => ({
+            id: i, word: w.word,
+            start_ms: Math.round(w.start * 1000),
+            end_ms:   Math.round(w.end   * 1000),
+          }),
+        );
+
+        await updateLog(supabase, logId, "success", undefined, undefined, Date.now() - start);
+        return json({ text: data.text ?? "", words });
+
+      } catch (err) {
+        const msg  = err instanceof Error ? err.message : String(err);
+        const code = (err as { code?: string }).code;
+        await updateLog(supabase, logId, "error", msg, code, Date.now() - start).catch(() => {});
+        return json({ error: `Transcription failed: ${msg}` }, 502);
       }
-
-      const formData = await req.formData();
-      const audioFile = formData.get("file") as File | null;
-      if (!audioFile) return json({ error: "No file provided" }, 400);
-
-      const groqForm = new FormData();
-      groqForm.append("file", audioFile, audioFile.name || "audio.mp4");
-      groqForm.append("model", "whisper-large-v3");
-      groqForm.append("response_format", "verbose_json");
-      groqForm.append("timestamp_granularities[]", "word");
-
-      const groqRes = await fetch(GROQ_API_URL, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${GROQ_KEY}` },
-        body: groqForm,
-      });
-
-      if (!groqRes.ok) {
-        const err = await groqRes.text();
-        return json({ error: `Groq error: ${err}` }, 502);
-      }
-
-      const data = await groqRes.json();
-      const words = (data.words ?? []).map(
-        (w: { word: string; start: number; end: number }, i: number) => ({
-          id: i,
-          word: w.word,
-          start_ms: Math.round(w.start * 1000),
-          end_ms: Math.round(w.end * 1000),
-        }),
-      );
-      return json({ text: data.text ?? "", words });
     }
 
-    // ── Route: detect-clips ───────────────────────────────────────────────────
+    // ── Route: detect-clips (segment) ─────────────────────────────────────────
     if (action === "detect-clips") {
-      const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
-      if (!OPENAI_KEY) {
-        return json(buildMockClips());
-      }
+      const logId = await insertLog(supabase, user.id, "segment", "pending");
+      const start = Date.now();
 
-      const body = await req.json();
-      const transcriptText: string = body.transcript ?? "";
+      try {
+        const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
+        if (!OPENAI_KEY) {
+          await updateLog(supabase, logId, "success", "mock response (no OPENAI_API_KEY)", undefined, 0);
+          return json(buildMockClips());
+        }
 
-      const systemPrompt = `You are an elite viral video producer. Identify the most engaging segments from the transcript for short-form content.`;
-      const userPrompt = `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
+        const body           = await req.json();
+        const transcriptText = String(body.transcript ?? "");
+
+        const systemPrompt = `You are an elite viral video producer. Identify the most engaging segments from the transcript for short-form content.`;
+        const userPrompt   = `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
 
 For each segment provide:
 - startTime: start timestamp in seconds (float)
@@ -116,36 +172,69 @@ Respond ONLY with valid JSON array of exactly 5 objects.
 Transcript:
 ${transcriptText}`;
 
-      const openaiRes = await fetch(OPENAI_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${OPENAI_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          temperature: 0.7,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }),
-      });
+        const openaiRes = await fetch(OPENAI_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_KEY}` },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0.7,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user",   content: userPrompt },
+            ],
+          }),
+        });
 
-      if (!openaiRes.ok) {
-        const err = await openaiRes.text();
-        return json({ error: `OpenAI error: ${err}` }, 502);
+        if (!openaiRes.ok) {
+          const err  = await openaiRes.text();
+          const code = String(openaiRes.status);
+          await updateLog(supabase, logId, "error", `OpenAI error: ${err}`, code, Date.now() - start);
+          return json({ error: `OpenAI error: ${err}` }, 502);
+        }
+
+        const data    = await openaiRes.json();
+        const content = data.choices?.[0]?.message?.content ?? "[]";
+        const parsed  = JSON.parse(content);
+        const clips   = Array.isArray(parsed)
+          ? parsed
+          : (parsed.clips ?? parsed.segments ?? Object.values(parsed)[0] ?? []);
+
+        await updateLog(supabase, logId, "success", undefined, undefined, Date.now() - start);
+        return json((clips as unknown[]).slice(0, 5));
+
+      } catch (err) {
+        const msg  = err instanceof Error ? err.message : String(err);
+        const code = (err as { code?: string }).code;
+        await updateLog(supabase, logId, "error", msg, code, Date.now() - start).catch(() => {});
+        return json({ error: `Segment detection failed: ${msg}` }, 502);
       }
+    }
 
-      const data = await openaiRes.json();
-      const content = data.choices?.[0]?.message?.content ?? "[]";
-      const parsed = JSON.parse(content);
-      const clips = Array.isArray(parsed)
-        ? parsed
-        : (parsed.clips ?? parsed.segments ?? Object.values(parsed)[0] ?? []);
+    // ── Route: render-log — client posts FFmpeg render outcome ────────────────
+    // The FFmpeg render step runs in the browser (FFmpeg.wasm). The client calls
+    // this route to log the result so observability is complete server-side.
+    if (action === "render-log") {
+      try {
+        const body: { status: LogStatus; errorCode?: string; durationMs?: number; message?: string } =
+          await req.json();
 
-      return json(clips.slice(0, 5));
+        const logId = await insertLog(
+          supabase, user.id, "render", body.status, body.message,
+        );
+        if (logId && body.status !== "pending") {
+          await updateLog(
+            supabase, logId,
+            body.status,
+            body.message,
+            body.errorCode,
+            body.durationMs,
+          );
+        }
+        return json({ ok: true });
+      } catch (err) {
+        return json({ error: "render-log failed: " + String(err) }, 500);
+      }
     }
 
     // ── Route: complete — atomically consume one credit ───────────────────────
@@ -156,11 +245,11 @@ ${transcriptText}`;
       if (consumeError) {
         return json({ error: "Failed to consume credit: " + consumeError.message }, 500);
       }
-
       return json({ ok: true });
     }
 
     return json({ error: "Unknown action" }, 400);
+
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return json({ error: msg }, 500);

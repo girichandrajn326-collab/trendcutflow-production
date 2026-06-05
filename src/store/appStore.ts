@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoStatus } from '../types/database';
 import { transcribeVideo, findViralClips, incrementCredit } from '../lib/ai';
 import type { AuthUser } from '../context/AuthContext';
@@ -22,6 +22,7 @@ export { VideoStatus };
 // ─── Pipeline step tracking ────────────────────────────────────────────────────
 
 export type PipelineStepId =
+  | 'download'
   | 'transcribe'
   | 'detect'
   | 'slice'
@@ -45,6 +46,7 @@ export interface UserAccount {
   plan: PlanTier;
   videosProcessed: number;
   totalCredits: number;
+  credits: number;
   avatarInitials: string;
 }
 
@@ -101,7 +103,6 @@ export interface Clip {
   endTime: number;
   transcript: TranscriptWord[];
   metadata: ClipMetadata;
-  // Original video URL when clip came from a URL source (not file upload)
   sourceVideoUrl?: string;
   scheduledAt?: Date;
 }
@@ -169,20 +170,18 @@ function getFileDuration(file: File): Promise<number> {
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     video.preload = 'metadata';
-    video.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      resolve(video.duration);
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Could not read video metadata'));
-    };
+    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(video.duration); };
+    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read video metadata')); };
     video.src = url;
   });
 }
 
 function isYouTubeUrl(url: string): boolean {
   return /youtube\.com|youtu\.be/i.test(url);
+}
+
+function isInstagramUrl(url: string): boolean {
+  return /instagram\.com/i.test(url);
 }
 
 function generateRandomStyleSeed(): number {
@@ -222,6 +221,7 @@ function buildUserFromAuth(authUser: AuthUser): UserAccount {
     plan: 'free',
     videosProcessed: 0,
     totalCredits: 1,
+    credits: 1,
     avatarInitials: initials,
   };
 }
@@ -243,6 +243,7 @@ const MOCK_USER: UserAccount = {
   plan: 'free',
   videosProcessed: 0,
   totalCredits: 1,
+  credits: 1,
   avatarInitials: 'GU',
 };
 
@@ -269,35 +270,25 @@ const MOCK_CLIPS: Clip[] = [
     title: 'I Changed ONE Thing & Made 5x More Revenue in 60 Days',
     duration: '0:58',
     thumbnail: THUMBNAIL_POOL[0],
-    startTime: 0,
-    endTime: 58,
+    startTime: 0, endTime: 58,
     transcript: MOCK_TRANSCRIPT,
     metadata: {
-      viralTitles: [
-        'I Changed ONE Thing & Made 5x More Revenue in 60 Days',
-        'Stop Selling Features (Do This Instead)',
-        'The Mindset That Took Me From 2% to 11% Conversion Rate',
-      ],
-      seoDescription: 'Discover the single mindset shift that transformed my business revenue. Stop selling features and start selling outcomes.',
+      viralTitles: ['I Changed ONE Thing & Made 5x More Revenue in 60 Days', 'Stop Selling Features (Do This Instead)', 'The Mindset That Took Me From 2% to 11% Conversion Rate'],
+      seoDescription: 'Discover the single mindset shift that transformed my business revenue.',
       hashtags: ['#BusinessGrowth', '#SalesTips', '#Entrepreneur', '#RevenueGrowth', '#MindsetShift', '#ConversionRate'],
       algorithmicTags: ['mindset shift business', 'increase conversion rate', 'sales strategy 2024', 'entrepreneur tips', 'business revenue growth'],
     },
   },
   {
     id: 'clip-2',
-    title: 'Most Creators Quit RIGHT Before Going Viral (Here\'s Proof)',
+    title: 'Most Creators Quit RIGHT Before Going Viral',
     duration: '1:02',
     thumbnail: THUMBNAIL_POOL[1],
-    startTime: 62,
-    endTime: 124,
+    startTime: 62, endTime: 124,
     transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
     metadata: {
-      viralTitles: [
-        'Most Creators Quit RIGHT Before Going Viral (Here\'s Proof)',
-        'The Algorithm Rewards This One Thing (It\'s Not Talent)',
-        'I Studied 200 Viral Accounts — They All Did This',
-      ],
-      seoDescription: 'After studying 200+ creator accounts that went viral, I found a shocking pattern. Most people quit between days 60–90 — the exact window before the algorithm rewards them.',
+      viralTitles: ["Most Creators Quit RIGHT Before Going Viral (Here's Proof)", "The Algorithm Rewards This One Thing (It's Not Talent)", 'I Studied 200 Viral Accounts — They All Did This'],
+      seoDescription: 'After studying 200+ creator accounts that went viral, I found a shocking pattern.',
       hashtags: ['#ContentCreator', '#YouTubeTips', '#ViralContent', '#CreatorEconomy', '#SocialMediaGrowth', '#ConsistencyIsKey'],
       algorithmicTags: ['creator tips going viral', 'youtube algorithm 2024', 'content creator strategy', 'grow on social media', 'consistency content creation'],
     },
@@ -307,16 +298,11 @@ const MOCK_CLIPS: Clip[] = [
     title: 'The 5-Line Cold Email That Gets 40% Reply Rates',
     duration: '0:54',
     thumbnail: THUMBNAIL_POOL[2],
-    startTime: 130,
-    endTime: 184,
+    startTime: 130, endTime: 184,
     transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
     metadata: {
-      viralTitles: [
-        'The 5-Line Cold Email That Gets 40% Reply Rates',
-        'I Sent 10,000 Cold Emails — Here\'s What Actually Works',
-        'Copy This Cold Email Formula (40% Response Rate)',
-      ],
-      seoDescription: 'After 10,000+ cold emails sent, I\'ve refined a 5-line formula that consistently achieves 40% reply rates. No long paragraphs — just a proven structure that gets responses.',
+      viralTitles: ['The 5-Line Cold Email That Gets 40% Reply Rates', "I Sent 10,000 Cold Emails — Here's What Actually Works", 'Copy This Cold Email Formula (40% Response Rate)'],
+      seoDescription: "After 10,000+ cold emails sent, I've refined a 5-line formula that consistently achieves 40% reply rates.",
       hashtags: ['#ColdEmail', '#EmailMarketing', '#LeadGeneration', '#SalesTips', '#OutreachStrategy', '#B2BSales'],
       algorithmicTags: ['cold email tips', 'email outreach strategy', 'b2b sales tactics', 'lead generation emails', 'sales email template'],
     },
@@ -326,16 +312,11 @@ const MOCK_CLIPS: Clip[] = [
     title: 'I Shared My Real Revenue Numbers — My Following Tripled',
     duration: '1:05',
     thumbnail: THUMBNAIL_POOL[3],
-    startTime: 190,
-    endTime: 255,
+    startTime: 190, endTime: 255,
     transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
     metadata: {
-      viralTitles: [
-        'I Shared My Real Revenue Numbers — My Following Tripled',
-        'Build in Public: The Growth Strategy Nobody Talks About',
-        'Why Showing Your Failures Online Is the Best Marketing',
-      ],
-      seoDescription: 'By sharing real revenue, real failures, and real spreadsheets, I tripled my following in 4 months. Here\'s why radical transparency is the ultimate growth strategy.',
+      viralTitles: ['I Shared My Real Revenue Numbers — My Following Tripled', 'Build in Public: The Growth Strategy Nobody Talks About', 'Why Showing Your Failures Online Is the Best Marketing'],
+      seoDescription: 'By sharing real revenue, real failures, and real spreadsheets, I tripled my following in 4 months.',
       hashtags: ['#BuildInPublic', '#CreatorEconomy', '#Transparency', '#PersonalBrand', '#StartupLife', '#ContentStrategy'],
       algorithmicTags: ['build in public strategy', 'personal brand growth', 'creator transparency', 'grow following fast', 'authentic content marketing'],
     },
@@ -345,16 +326,11 @@ const MOCK_CLIPS: Clip[] = [
     title: 'A Client Said I Was Too Cheap to Be Credible — So I Raised Prices',
     duration: '0:51',
     thumbnail: THUMBNAIL_POOL[4],
-    startTime: 260,
-    endTime: 311,
+    startTime: 260, endTime: 311,
     transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
     metadata: {
-      viralTitles: [
-        'A Client Said I Was \'Too Cheap to Be Credible\' — So I Raised Prices',
-        'Raising My Prices 40% Got Me MORE Clients (Here\'s Why)',
-        'The 2AM Lesson That Changed My Entire Pricing Strategy',
-      ],
-      seoDescription: 'When a prospect said I was \'too cheap to be credible,\' I raised my prices 40% and booked 3 new clients in 2 weeks. Price isn\'t just economics — it\'s positioning.',
+      viralTitles: ["A Client Said I Was 'Too Cheap to Be Credible' — So I Raised Prices", "Raising My Prices 40% Got Me MORE Clients (Here's Why)", 'The 2AM Lesson That Changed My Entire Pricing Strategy'],
+      seoDescription: "When a prospect said I was 'too cheap to be credible,' I raised my prices 40% and booked 3 new clients in 2 weeks.",
       hashtags: ['#PricingStrategy', '#Freelance', '#BusinessTips', '#Consulting', '#ValueBasedPricing', '#Entrepreneurship'],
       algorithmicTags: ['pricing strategy business', 'raise your prices', 'value based pricing', 'freelancer tips', 'consulting pricing'],
     },
@@ -362,11 +338,12 @@ const MOCK_CLIPS: Clip[] = [
 ];
 
 const INITIAL_PIPELINE: PipelineStep[] = [
-  { id: 'transcribe', label: 'Transcribing audio (Whisper)',   status: 'pending' },
-  { id: 'detect',     label: 'Detecting viral hooks (GPT-4o)', status: 'pending' },
-  { id: 'slice',      label: 'Slicing video clips (FFmpeg)',   status: 'pending' },
-  { id: 'subtitles',  label: 'Burning captions',               status: 'pending' },
-  { id: 'metadata',   label: 'Generating metadata',            status: 'pending' },
+  { id: 'download',  label: 'Downloading video (server-side)',   status: 'pending' },
+  { id: 'transcribe', label: 'Transcribing audio (Whisper)',     status: 'pending' },
+  { id: 'detect',     label: 'Detecting viral hooks (GPT-4o)',   status: 'pending' },
+  { id: 'slice',      label: 'Slicing video clips (FFmpeg)',     status: 'pending' },
+  { id: 'subtitles',  label: 'Burning captions',                 status: 'pending' },
+  { id: 'metadata',   label: 'Generating metadata',              status: 'pending' },
 ];
 
 // ─── useAppState hook ─────────────────────────────────────────────────────────
@@ -391,13 +368,15 @@ export function useAppState() {
     toasts: [],
   });
 
+  // Keep a ref for the realtime channel so we can unsubscribe on logout
+  const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
   // ── Auth sync ──────────────────────────────────────────────────────────────
 
   const setAuthUser = useCallback((authUser: AuthUser | null) => {
     setState(s => ({
       ...s,
       user: authUser ? buildUserFromAuth(authUser) : MOCK_USER,
-      // Reset session-scoped state on logout
       ...(authUser ? {} : {
         screen: 'intake' as AppScreen,
         clips: [],
@@ -415,12 +394,11 @@ export function useAppState() {
       }),
     }));
 
-    // Sync credits + plan + publish queue from DB when a user logs in
     if (authUser) {
-      // Credits / plan
+      // Initial credits/plan fetch
       supabase
         .from('users')
-        .select('current_plan, total_credits, credits_used')
+        .select('current_plan, total_credits, credits_used, credits')
         .eq('id', authUser.id)
         .maybeSingle()
         .then(({ data }) => {
@@ -430,14 +408,44 @@ export function useAppState() {
             ...s,
             user: {
               ...s.user,
-              plan: planMap[data.current_plan] ?? 'free',
-              totalCredits: data.total_credits,
+              plan:            planMap[data.current_plan] ?? 'free',
+              totalCredits:    data.total_credits,
               videosProcessed: data.credits_used,
+              credits:         data.credits ?? Math.max(data.total_credits - data.credits_used, 0),
             },
           }));
         });
 
-      // Publish queue — restore pending entries
+      // Realtime subscription — update credit counter instantly after consume/grant
+      realtimeChannelRef.current?.unsubscribe();
+      realtimeChannelRef.current = supabase
+        .channel(`user-credits-${authUser.id}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${authUser.id}` },
+          (payload) => {
+            const d = payload.new as {
+              current_plan: string;
+              total_credits: number;
+              credits_used: number;
+              credits: number;
+            };
+            const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+            setState(s => ({
+              ...s,
+              user: {
+                ...s.user,
+                plan:            planMap[d.current_plan] ?? s.user.plan,
+                totalCredits:    d.total_credits,
+                videosProcessed: d.credits_used,
+                credits:         d.credits ?? Math.max(d.total_credits - d.credits_used, 0),
+              },
+            }));
+          },
+        )
+        .subscribe();
+
+      // Publish queue restore
       supabase
         .from('publish_queue')
         .select('clip_id, clip_title, platform, interval_hours, scheduled_at')
@@ -451,11 +459,18 @@ export function useAppState() {
             intervalHours: row.interval_hours as QueueInterval,
             scheduledAt: new Date(row.scheduled_at),
           })).filter(e => e.clipId);
-          if (entries.length > 0) {
-            setState(s => ({ ...s, publishQueue: entries }));
-          }
+          if (entries.length > 0) setState(s => ({ ...s, publishQueue: entries }));
         });
+    } else {
+      // Cleanup realtime on logout
+      realtimeChannelRef.current?.unsubscribe();
+      realtimeChannelRef.current = null;
     }
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { realtimeChannelRef.current?.unsubscribe(); };
   }, []);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -483,13 +498,7 @@ export function useAppState() {
       ...s,
       clips: s.clips.map(c =>
         c.id === clipId
-          ? {
-              ...c,
-              metadata: {
-                ...c.metadata,
-                viralTitles: c.metadata.viralTitles.map((t, i) => i === titleIndex ? value : t),
-              },
-            }
+          ? { ...c, metadata: { ...c.metadata, viralTitles: c.metadata.viralTitles.map((t, i) => i === titleIndex ? value : t) } }
           : c,
       ),
     }));
@@ -511,19 +520,11 @@ export function useAppState() {
 
   // ── Upgrade modal ──────────────────────────────────────────────────────────
 
-  const openUpgradeModal = useCallback(() => {
-    setState(s => ({ ...s, isUpgradeModalOpen: true }));
-  }, []);
-
-  const closeUpgradeModal = useCallback(() => {
-    setState(s => ({ ...s, isUpgradeModalOpen: false }));
-  }, []);
+  const openUpgradeModal  = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: true  })), []);
+  const closeUpgradeModal = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: false })), []);
 
   const selectPlan = useCallback((plan: PlanTier) => {
-    setState(s => ({
-      ...s,
-      user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] },
-    }));
+    setState(s => ({ ...s, user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] } }));
   }, []);
 
   const purchasePlan = useCallback((plan: PlanTier) => {
@@ -532,14 +533,14 @@ export function useAppState() {
       user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] },
       isUpgradeModalOpen: false,
     }));
-    // Persist plan upgrade to DB (webhook also does this — belt-and-suspenders)
     setState(s => {
       if (s.user.id) {
         const planDbMap: Record<PlanTier, string> = { free: 'FREE', creator: 'CREATOR', pro: 'PRO' };
         supabase.from('users').update({
-          current_plan: planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
+          current_plan:  planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
           total_credits: PLAN_LIMITS[plan],
-          credits_used: 0,
+          credits_used:  0,
+          credits:       PLAN_LIMITS[plan],
         }).eq('id', s.user.id).then(({ error }) => {
           if (error) console.error('purchasePlan DB write failed:', error.message);
         });
@@ -563,17 +564,16 @@ export function useAppState() {
   const addToPublishQueue = useCallback((entry: QueueEntry) => {
     setState(s => {
       const next = [...s.publishQueue.filter(e => e.clipId !== entry.clipId), entry];
-      // Persist to DB — upsert by user_id + clip_id
       if (s.user.id) {
         const clip = s.clips.find(c => c.id === entry.clipId);
         supabase.from('publish_queue').upsert({
-          user_id: s.user.id,
-          clip_id: entry.clipId,
-          clip_title: clip?.title ?? '',
-          platform: entry.platform,
+          user_id:       s.user.id,
+          clip_id:       entry.clipId,
+          clip_title:    clip?.title ?? '',
+          platform:      entry.platform,
           interval_hours: entry.intervalHours,
-          scheduled_at: entry.scheduledAt.toISOString(),
-          status: 'pending',
+          scheduled_at:  entry.scheduledAt.toISOString(),
+          status:        'pending',
         }, { onConflict: 'user_id,clip_id' }).then(({ error }) => {
           if (error) console.error('addToPublishQueue DB write failed:', error.message);
         });
@@ -586,9 +586,7 @@ export function useAppState() {
     setState(s => {
       if (s.user.id) {
         supabase.from('publish_queue')
-          .delete()
-          .eq('user_id', s.user.id)
-          .eq('clip_id', clipId)
+          .delete().eq('user_id', s.user.id).eq('clip_id', clipId)
           .then(({ error }) => {
             if (error) console.error('removeFromPublishQueue DB delete failed:', error.message);
           });
@@ -602,9 +600,7 @@ export function useAppState() {
   const addToast = useCallback((toast: Omit<Toast, 'id'>) => {
     const id = crypto.randomUUID();
     setState(s => ({ ...s, toasts: [...s.toasts, { ...toast, id }] }));
-    setTimeout(() => {
-      setState(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) }));
-    }, 5000);
+    setTimeout(() => setState(s => ({ ...s, toasts: s.toasts.filter(t => t.id !== id) })), 5000);
   }, []);
 
   const dismissToast = useCallback((id: string) => {
@@ -616,22 +612,10 @@ export function useAppState() {
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
     if (!source) return;
-
-    // Check credit limit
     if (state.user.videosProcessed >= state.user.totalCredits) return;
 
-    // YouTube and Twitch URLs cannot be fetched as raw video files from the browser.
-    // The transcription service requires an actual audio/video file.
-    if (typeof source === 'string' && isYouTubeUrl(source)) {
-      setState(s => ({
-        ...s,
-        screen: 'processing',
-        clips: [],
-        pipeline: INITIAL_PIPELINE.map(step => ({ ...step })),
-        pipelineError: 'YouTube URLs cannot be processed directly — the browser cannot download YouTube video files due to platform restrictions. Please download the video first and upload the file instead.',
-      }));
-      return;
-    }
+    const isUrlSource  = typeof source === 'string';
+    const needsDownload = isUrlSource && (isYouTubeUrl(source) || isInstagramUrl(source));
 
     setState(s => ({
       ...s,
@@ -642,40 +626,76 @@ export function useAppState() {
     }));
 
     try {
-      // Measure actual video duration before transcribing so mock clip timestamps
-      // can be scaled to fit the real video.
-      let videoDurationSecs: number | undefined;
-      if (source instanceof File) {
-        videoDurationSecs = await getFileDuration(source).catch(() => undefined);
+      let videoFile: File;
+
+      if (needsDownload) {
+        // ── Step 0: Download via server-side proxy ──────────────────────────
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'active') }));
+
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) throw new Error('Not authenticated. Please sign in again.');
+
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+        const dlRes = await fetch(`${supabaseUrl}/functions/v1/download-video`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ url: source }),
+        });
+
+        if (!dlRes.ok) {
+          const err = await dlRes.json().catch(() => ({ error: 'Download failed' }));
+          throw new Error(err.error ?? 'Video download failed');
+        }
+
+        const blob  = await dlRes.blob();
+        const title = decodeURIComponent(dlRes.headers.get('X-Video-Title') ?? 'video');
+        videoFile   = new File([blob], `${title}.mp4`, { type: 'video/mp4' });
+
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'done') }));
+      } else {
+        // File upload — mark download step as done immediately
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'done') }));
+        videoFile = source as File;
       }
 
+      // ── Step 1: Measure duration ────────────────────────────────────────
+      let videoDurationSecs: number | undefined;
+      videoDurationSecs = await getFileDuration(videoFile).catch(() => undefined);
+
+      // ── Step 2: Transcribe ──────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'active') }));
-      const { text: transcriptText, words } = await transcribeVideo(source);
+      const { text: transcriptText, words } = await transcribeVideo(videoFile);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'done') }));
 
+      // ── Step 3: Detect viral segments ───────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'active') }));
       const viralResults = await findViralClips(transcriptText, videoDurationSecs);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'done') }));
 
+      // ── Step 4: Slice ───────────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'active') }));
       await sleep(900);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'done') }));
 
+      // ── Step 5: Subtitles ───────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'active') }));
       await sleep(700);
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'done') }));
 
+      // ── Step 6: Metadata ────────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'metadata', 'active') }));
 
       const videoSourceId = crypto.randomUUID();
-      // Capture URL source so EditorScreen can display the video directly
-      const urlSource = typeof source === 'string' ? source : undefined;
+      const urlSource     = isUrlSource ? (source as string) : undefined;
 
       const newClips: Clip[] = viralResults.map((r, i) => {
         const clipWords = words.filter(
           w => w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime,
         );
-
         const uiWords: TranscriptWord[] = clipWords.length > 0
           ? clipWords.map(w => ({ id: w.id, word: w.word, startMs: w.start_ms, endMs: w.end_ms }))
           : [{ id: 0, word: 'Transcript pending', startMs: 0, endMs: 1000 }];
@@ -699,14 +719,13 @@ export function useAppState() {
         };
       });
 
-      // Increment credit server-side (non-blocking)
+      // Consume credit server-side (atomic, via RPC)
       incrementCredit().catch(() => {});
 
       setState(s => {
-        // Persist video_source + clips to DB (fire-and-forget)
         if (s.user.id) {
           (async () => {
-            const sourceTitle = typeof source === 'string' ? source : (source as File).name;
+            const sourceTitle = isUrlSource ? (source as string) : (source as File).name;
             const { data: vsRow } = await supabase
               .from('video_sources')
               .insert({ user_id: s.user.id, title: sourceTitle, source_url: urlSource ?? '', status: 'COMPLETED', duration: 0 })
@@ -754,40 +773,30 @@ export function useAppState() {
       }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.uploadedFile, state.inputUrl, state.user.videosProcessed, state.user.totalCredits]);
+  }, [state.uploadedFile, state.inputUrl, state.user.videosProcessed, state.user.totalCredits, state.user.id]);
 
   return {
     state,
-    // auth
     setAuthUser,
-    // nav
     setScreen,
-    // clips
     setActiveClipIndex,
     setSubtitlePreset,
     setActiveWordIndex,
     updateMetadataTitle,
-    // upload
     setInputUrl,
     setIsDragging,
     setUploadedFile,
-    // upgrade
     openUpgradeModal,
     closeUpgradeModal,
     selectPlan,
     purchasePlan,
-    // dropdown
     toggleAccountDropdown,
     closeAccountDropdown,
-    // queue
     addToPublishQueue,
     removeFromPublishQueue,
-    // toasts
     addToast,
     dismissToast,
-    // pipeline
     runPipeline,
-    // preview data for first-run demo
     getMockClips: () => MOCK_CLIPS,
   };
 }
