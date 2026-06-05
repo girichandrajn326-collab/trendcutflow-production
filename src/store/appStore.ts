@@ -742,11 +742,11 @@ export function useAppState() {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
         }
 
-        // Upload the file directly to Supabase Storage first.
-        // This avoids the ~6 MB edge-function request-body limit that causes
-        // "Failed to fetch" errors for typical video files.
+        // Upload directly to Supabase Storage first.
+        // Path must start with the userId UUID so Supabase Storage can set
+        // owner_id correctly (it derives it from the first path segment).
         const safeName    = source.name.replace(/[^a-z0-9._-]/gi, '_').toLowerCase();
-        const uploadPath  = `uploads/${userId}/${Date.now()}_${safeName}`;
+        const uploadPath  = `${userId}/${Date.now()}_${safeName}`;
 
         setState(s => ({
           ...s,
