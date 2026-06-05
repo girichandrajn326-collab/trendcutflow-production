@@ -1,5 +1,5 @@
 // Edge Function: check-credits
-// Returns the authenticated user's current credit usage and enforces the limit.
+// Returns the authenticated user's current credit balance and plan info.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -30,17 +30,18 @@ Deno.serve(async (req: Request) => {
 
     const { data: profile, error } = await supabase
       .from("users")
-      .select("current_plan, total_credits, credits_used")
+      .select("current_plan, total_credits, credits_used, credits")
       .eq("id", user.id)
       .maybeSingle();
 
     if (error || !profile) return json({ error: "Profile not found" }, 404);
 
     return json({
-      plan: profile.current_plan,
+      plan:         profile.current_plan,
       totalCredits: profile.total_credits,
-      creditsUsed: profile.credits_used,
-      hasCredits: profile.credits_used < profile.total_credits,
+      creditsUsed:  profile.credits_used,
+      credits:      profile.credits,
+      hasCredits:   profile.credits > 0,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

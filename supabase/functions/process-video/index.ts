@@ -1,6 +1,6 @@
 // Edge Function: process-video
 // Proxies AI calls (Groq Whisper transcription + OpenAI viral clip detection)
-// keeping API keys server-side. Also enforces credits before running.
+// keeping API keys server-side. Enforces credits via DB RPCs before running.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -19,7 +19,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Authenticate the caller
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return json({ error: "Missing Authorization header" }, 401);
@@ -37,17 +36,14 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Unauthorized" }, 401);
     }
 
-    // ── Credit check ─────────────────────────────────────────────────────────
-    const { data: profile, error: profileError } = await supabase
-      .from("users")
-      .select("credits_used, total_credits")
-      .eq("id", user.id)
-      .maybeSingle();
+    // ── Credit guard (RPC) ────────────────────────────────────────────────────
+    const { data: canProcess, error: guardError } = await supabase
+      .rpc("can_process_video", { uid: user.id });
 
-    if (profileError || !profile) {
-      return json({ error: "User profile not found" }, 404);
+    if (guardError) {
+      return json({ error: "Credit check failed: " + guardError.message }, 500);
     }
-    if (profile.credits_used >= profile.total_credits) {
+    if (!canProcess) {
       return json({ error: "Credit limit reached. Please upgrade your plan." }, 402);
     }
 
@@ -58,7 +54,6 @@ Deno.serve(async (req: Request) => {
     if (action === "transcribe") {
       const GROQ_KEY = Deno.env.get("GROQ_API_KEY");
       if (!GROQ_KEY) {
-        // Return mock when key not configured
         return json(buildMockTranscript());
       }
 
@@ -153,13 +148,14 @@ ${transcriptText}`;
       return json(clips.slice(0, 5));
     }
 
-    // ── Route: complete (transcribe + detect + increment credit) ──────────────
+    // ── Route: complete — atomically consume one credit ───────────────────────
     if (action === "complete") {
-      // Increment credits_used now that we know processing succeeded
-      await supabase
-        .from("users")
-        .update({ credits_used: profile.credits_used + 1 })
-        .eq("id", user.id);
+      const { error: consumeError } = await supabase
+        .rpc("consume_credit", { uid: user.id });
+
+      if (consumeError) {
+        return json({ error: "Failed to consume credit: " + consumeError.message }, 500);
+      }
 
       return json({ ok: true });
     }
