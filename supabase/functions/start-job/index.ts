@@ -442,6 +442,8 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
       error_message: msg,
       updated_at:    new Date().toISOString(),
     }).eq("id", jobId).catch(() => {});
+    // Always write a terminal log row so the dashboard shows a clear failure record
+    await insertLog(supabase, userId, "job_failed", "error", msg).catch(() => {});
   } finally {
     await Deno.remove(inputPath).catch(() => {});
     await Deno.remove(audioPath).catch(() => {});

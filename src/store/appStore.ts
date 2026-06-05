@@ -544,7 +544,10 @@ export function useAppState() {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => { realtimeChannelRef.current?.unsubscribe(); };
+    return () => {
+      realtimeChannelRef.current?.unsubscribe();
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+    };
   }, []);
 
   // ── Navigation ─────────────────────────────────────────────────────────────

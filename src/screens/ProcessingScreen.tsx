@@ -124,7 +124,6 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
                 >
                   {/* Step icon */}
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-300 ${
-                    isError  ? 'bg-red-500/20 border border-red-500/30' :
                     isError   ? 'bg-red-500/20 border border-red-500/30' :
                     isSkipped ? 'bg-amber-500/10 border border-amber-500/20' :
                     isDone    ? 'bg-cyan-500/20 border border-cyan-500/30' :
