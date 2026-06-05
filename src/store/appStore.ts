@@ -742,11 +742,12 @@ export function useAppState() {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
         }
 
-        // Upload directly to Supabase Storage first.
-        // Path must start with the userId UUID so Supabase Storage can set
-        // owner_id correctly (it derives it from the first path segment).
-        const safeName    = source.name.replace(/[^a-z0-9._-]/gi, '_').toLowerCase();
-        const uploadPath  = `${userId}/${Date.now()}_${safeName}`;
+        // Build a UUID-based storage path.
+        // - First segment MUST be the userId UUID so Supabase Storage sets owner_id correctly.
+        // - Filename uses crypto.randomUUID() to guarantee no special characters.
+        const ext        = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
+        const fileId     = crypto.randomUUID();
+        const uploadPath = `${userId}/${fileId}.${ext}`;
 
         setState(s => ({
           ...s,
