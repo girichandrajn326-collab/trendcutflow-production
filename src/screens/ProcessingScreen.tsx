@@ -16,7 +16,7 @@ const CLIP_TITLES = [
 ];
 
 export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: ProcessingScreenProps) {
-  const allDone = pipeline.every(s => s.status === 'done');
+  const allDone = pipeline.every(s => s.status === 'done' || s.status === 'skipped');
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 pt-16 pb-12">
@@ -80,40 +80,43 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
         <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 mb-6">
           <div className="space-y-3">
             {pipeline.map((step) => {
-              const isDone   = step.status === 'done';
-              const isActive = step.status === 'active';
-              const isError  = step.status === 'error';
+              const isDone    = step.status === 'done';
+              const isActive  = step.status === 'active';
+              const isError   = step.status === 'error';
+              const isSkipped = step.status === 'skipped';
 
               return (
                 <div
                   key={step.id}
                   className={`flex items-center gap-3 p-3 rounded-xl transition-all duration-500 ${
-                    isError  ? 'bg-red-500/[0.08] border border-red-500/20' :
-                    isActive ? 'bg-sky-500/[0.08] border border-sky-500/20' :
-                    isDone   ? 'opacity-50' :
+                    isError   ? 'bg-red-500/[0.08] border border-red-500/20' :
+                    isActive  ? 'bg-sky-500/[0.08] border border-sky-500/20' :
+                    isSkipped ? 'bg-amber-500/[0.05] border border-amber-500/15 opacity-60' :
+                    isDone    ? 'opacity-50' :
                     'opacity-20'
                   }`}
                 >
-                  {/* Step icon / indicator */}
+                  {/* Step icon */}
                   <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-300 ${
                     isError  ? 'bg-red-500/20 border border-red-500/30' :
-                    isDone   ? 'bg-cyan-500/20 border border-cyan-500/30' :
-                    isActive ? 'bg-sky-500/20 border border-sky-500/30' :
+                    isError   ? 'bg-red-500/20 border border-red-500/30' :
+                    isSkipped ? 'bg-amber-500/10 border border-amber-500/20' :
+                    isDone    ? 'bg-cyan-500/20 border border-cyan-500/30' :
+                    isActive  ? 'bg-sky-500/20 border border-sky-500/30' :
                     'bg-white/[0.04] border border-white/[0.08]'
                   }`}>
-                    {isDone ? (
-                      <CheckIcon />
-                    ) : isError ? (
-                      <XIcon />
-                    ) : (
-                      <StepDot active={isActive} />
-                    )}
+                    {isDone    ? <CheckIcon /> :
+                     isError   ? <XIcon /> :
+                     isSkipped ? <SkipIcon /> :
+                     <StepDot active={isActive} />}
                   </div>
 
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-white">{step.label}</div>
-                    {(isActive || isError) && (
-                      <div className={`text-xs mt-0.5 ${isError ? 'text-red-400' : 'text-slate-400'}`}>
+                    {(isActive || isError || isSkipped || (isDone && step.detail)) && (
+                      <div className={`text-xs mt-0.5 ${
+                        isError ? 'text-red-400' : isSkipped ? 'text-amber-400/80' : 'text-slate-400'
+                      }`}>
                         {step.detail}
                       </div>
                     )}
@@ -121,6 +124,11 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
 
                   {isActive && (
                     <div className="w-4 h-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                  )}
+                  {isSkipped && (
+                    <span className="text-[10px] font-semibold text-amber-500/70 uppercase tracking-wide flex-shrink-0">
+                      Skipped
+                    </span>
                   )}
                 </div>
               );
@@ -148,6 +156,14 @@ function CheckIcon() {
   return (
     <svg className="w-4 h-4 text-cyan-400" viewBox="0 0 16 16" fill="currentColor">
       <path d="M13.5 2.5L6 10 2.5 6.5l-1 1L6 12l8.5-8.5z" />
+    </svg>
+  );
+}
+
+function SkipIcon() {
+  return (
+    <svg className="w-4 h-4 text-amber-400/80" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M3 3.5l5 4.5-5 4.5V3.5zM9.5 3.5l5 4.5-5 4.5V3.5z" />
     </svg>
   );
 }

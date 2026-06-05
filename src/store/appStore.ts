@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoStatus } from '../types/database';
-import { transcribeVideo, findViralClips, incrementCredit } from '../lib/ai';
+import { transcribeVideo, findViralClips, incrementCredit, checkVideoAudio } from '../lib/ai';
 import type { AuthUser } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 
@@ -23,18 +23,20 @@ export { VideoStatus };
 
 export type PipelineStepId =
   | 'download'
+  | 'audio-check'
   | 'transcribe'
   | 'detect'
   | 'slice'
   | 'subtitles'
   | 'metadata';
 
-export type PipelineStepStatus = 'pending' | 'active' | 'done' | 'error';
+export type PipelineStepStatus = 'pending' | 'active' | 'done' | 'error' | 'skipped';
 
 export interface PipelineStep {
   id: PipelineStepId;
   label: string;
   status: PipelineStepStatus;
+  detail?: string;
 }
 
 // ─── User / Plan types ────────────────────────────────────────────────────────
@@ -105,6 +107,7 @@ export interface Clip {
   metadata: ClipMetadata;
   sourceVideoUrl?: string;
   scheduledAt?: Date;
+  noAudio?: boolean;
 }
 
 // ─── App state ────────────────────────────────────────────────────────────────
@@ -199,12 +202,37 @@ function sleep(ms: number) {
   return new Promise<void>(r => setTimeout(r, ms));
 }
 
+// Fallback segmentation for silent videos — even 30-second visual chunks up to 5 clips.
+function buildNoAudioClips(durationSecs: number): import('../lib/ai').ViralClipResult[] {
+  const count           = Math.min(5, Math.max(1, Math.floor(durationSecs / 30)));
+  const segmentDuration = durationSecs / count;
+  return Array.from({ length: count }, (_, i) => {
+    const start = Math.round(i * segmentDuration * 10) / 10;
+    const end   = Math.round(Math.min((i + 1) * segmentDuration, durationSecs) * 10) / 10;
+    return {
+      startTime: start,
+      endTime:   end,
+      viralTitles: [
+        `Clip ${i + 1} — Visual Segment`,
+        `Part ${i + 1} of ${count}`,
+        `Scene ${i + 1}`,
+      ],
+      seoDescription: `Visual content segment ${i + 1} of ${count}. No audio detected — time-based cut.`,
+      hashtags:        [],
+      algorithmicTags: [],
+    };
+  });
+}
+
 function setStepStatus(
   steps: PipelineStep[],
   id: PipelineStepId,
   status: PipelineStepStatus,
+  detail?: string,
 ): PipelineStep[] {
-  return steps.map(s => s.id === id ? { ...s, status } : s);
+  return steps.map(s =>
+    s.id === id ? { ...s, status, ...(detail !== undefined ? { detail } : {}) } : s,
+  );
 }
 
 function buildUserFromAuth(authUser: AuthUser): UserAccount {
@@ -338,12 +366,13 @@ const MOCK_CLIPS: Clip[] = [
 ];
 
 const INITIAL_PIPELINE: PipelineStep[] = [
-  { id: 'download',  label: 'Downloading video (server-side)',   status: 'pending' },
-  { id: 'transcribe', label: 'Transcribing audio (Whisper)',     status: 'pending' },
-  { id: 'detect',     label: 'Detecting viral hooks (GPT-4o)',   status: 'pending' },
-  { id: 'slice',      label: 'Slicing video clips (FFmpeg)',     status: 'pending' },
-  { id: 'subtitles',  label: 'Burning captions',                 status: 'pending' },
-  { id: 'metadata',   label: 'Generating metadata',              status: 'pending' },
+  { id: 'download',    label: 'Downloading video (server-side)',   status: 'pending' },
+  { id: 'audio-check', label: 'Analysing audio stream',            status: 'pending' },
+  { id: 'transcribe',  label: 'Transcribing audio (Whisper)',      status: 'pending' },
+  { id: 'detect',      label: 'Detecting viral hooks (GPT-4o)',    status: 'pending' },
+  { id: 'slice',       label: 'Slicing video clips (FFmpeg)',      status: 'pending' },
+  { id: 'subtitles',   label: 'Burning captions',                  status: 'pending' },
+  { id: 'metadata',    label: 'Generating metadata',               status: 'pending' },
 ];
 
 // ─── useAppState hook ─────────────────────────────────────────────────────────
@@ -666,15 +695,45 @@ export function useAppState() {
       let videoDurationSecs: number | undefined;
       videoDurationSecs = await getFileDuration(videoFile).catch(() => undefined);
 
-      // ── Step 2: Transcribe ──────────────────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'active') }));
-      const { text: transcriptText, words } = await transcribeVideo(videoFile);
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'done') }));
+      // ── Step 2: Pre-flight audio check ─────────────────────────────────
+      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'audio-check', 'active') }));
+      const audioCheck = await checkVideoAudio(videoFile);
+      const hasAudio   = audioCheck.hasAudio;
 
-      // ── Step 3: Detect viral segments ───────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'active') }));
-      const viralResults = await findViralClips(transcriptText, videoDurationSecs);
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'done') }));
+      setState(s => ({
+        ...s,
+        pipeline: setStepStatus(
+          s.pipeline, 'audio-check', 'done',
+          hasAudio
+            ? `Audio detected: Yes (${audioCheck.method})`
+            : `Audio detected: No — using visual segmentation (${audioCheck.method})`,
+        ),
+      }));
+
+      // ── Steps 3–4: Transcribe + Detect (audio) OR time-based fallback ──
+      let viralResults: import('../lib/ai').ViralClipResult[];
+      let transcriptWords: { id: number; word: string; start_ms: number; end_ms: number }[] = [];
+
+      if (hasAudio) {
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'active') }));
+        const { text: transcriptText, words } = await transcribeVideo(videoFile);
+        transcriptWords = words;
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'done') }));
+
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'active') }));
+        viralResults = await findViralClips(transcriptText, videoDurationSecs);
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'done') }));
+      } else {
+        // Silent video — skip Whisper + GPT, segment by visual pacing (30s chunks)
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(
+            setStepStatus(s.pipeline, 'transcribe', 'skipped', 'Skipped — no audio stream detected'),
+            'detect', 'skipped', 'Using time-based 30s visual segmentation',
+          ),
+        }));
+        viralResults = buildNoAudioClips(videoDurationSecs ?? 300);
+      }
 
       // ── Step 4: Slice ───────────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'active') }));
@@ -682,9 +741,16 @@ export function useAppState() {
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'done') }));
 
       // ── Step 5: Subtitles ───────────────────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'active') }));
-      await sleep(700);
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'done') }));
+      if (hasAudio) {
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'active') }));
+        await sleep(700);
+        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'done') }));
+      } else {
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'subtitles', 'skipped', 'Skipped — silent video'),
+        }));
+      }
 
       // ── Step 6: Metadata ────────────────────────────────────────────────
       setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'metadata', 'active') }));
@@ -693,12 +759,14 @@ export function useAppState() {
       const urlSource     = isUrlSource ? (source as string) : undefined;
 
       const newClips: Clip[] = viralResults.map((r, i) => {
-        const clipWords = words.filter(
+        const clipWords = transcriptWords.filter(
           w => w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime,
         );
-        const uiWords: TranscriptWord[] = clipWords.length > 0
-          ? clipWords.map(w => ({ id: w.id, word: w.word, startMs: w.start_ms, endMs: w.end_ms }))
-          : [{ id: 0, word: 'Transcript pending', startMs: 0, endMs: 1000 }];
+        const uiWords: TranscriptWord[] = hasAudio
+          ? (clipWords.length > 0
+              ? clipWords.map(w => ({ id: w.id, word: w.word, startMs: w.start_ms, endMs: w.end_ms }))
+              : [{ id: 0, word: 'Transcript pending', startMs: 0, endMs: 1000 }])
+          : []; // no words for silent video
 
         return {
           id: crypto.randomUUID(),
@@ -716,6 +784,7 @@ export function useAppState() {
             algorithmicTags: r.algorithmicTags,
           },
           sourceVideoUrl: urlSource,
+          noAudio: !hasAudio,
         };
       });
 

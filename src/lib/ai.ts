@@ -21,6 +21,12 @@ export interface ViralClipResult {
   algorithmicTags: string[];
 }
 
+export interface AudioCheckResult {
+  hasAudio: boolean;
+  duration?: number;
+  method: 'ffprobe' | 'binary-scan' | 'assumed';
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function getAuthHeader(): Promise<string | null> {
@@ -31,6 +37,37 @@ async function getAuthHeader(): Promise<string | null> {
 function edgeFnUrl(action: string): string {
   const base = import.meta.env.VITE_SUPABASE_URL as string;
   return `${base}/functions/v1/process-video?action=${action}`;
+}
+
+// ─── Step 0: Pre-flight audio check ──────────────────────────────────────────
+// Sends the first 512 KB of the video to the server; returns whether an audio
+// stream was detected and which detection method was used.
+
+export async function checkVideoAudio(videoFile: File): Promise<AudioCheckResult> {
+  const authHeader = await getAuthHeader();
+  if (!authHeader) return { hasAudio: true, method: 'assumed' };
+
+  try {
+    const chunk    = videoFile.slice(0, 524288); // first 512 KB
+    const formData = new FormData();
+    formData.append('file', chunk, videoFile.name);
+
+    const res = await fetch(edgeFnUrl('check-audio'), {
+      method: 'POST',
+      headers: { Authorization: authHeader },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      console.warn('Audio check returned non-OK, assuming audio present');
+      return { hasAudio: true, method: 'assumed' };
+    }
+
+    return await res.json() as AudioCheckResult;
+  } catch (err) {
+    console.warn('checkVideoAudio failed, assuming audio present:', err);
+    return { hasAudio: true, method: 'assumed' };
+  }
 }
 
 // ─── Step 1: Transcribe ───────────────────────────────────────────────────────
