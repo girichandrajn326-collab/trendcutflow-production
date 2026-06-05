@@ -737,6 +737,11 @@ export function useAppState() {
       };
 
       if (source instanceof File) {
+        // Enforce 500 MB hard cap before touching the network
+        if (source.size > 500 * 1024 * 1024) {
+          throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
+        }
+
         // Upload the file directly to Supabase Storage first.
         // This avoids the ~6 MB edge-function request-body limit that causes
         // "Failed to fetch" errors for typical video files.
@@ -750,7 +755,7 @@ export function useAppState() {
         }));
 
         const { error: storageErr } = await supabase.storage
-          .from('video-uploads')
+          .from('videos')
           .upload(uploadPath, source, { contentType: source.type || 'video/mp4' });
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);

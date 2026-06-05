@@ -21,7 +21,9 @@ const corsHeaders = {
 
 const GROQ_TRANSCRIBE_URL   = "https://api.groq.com/openai/v1/audio/transcriptions";
 const OPENAI_CHAT_URL       = "https://api.openai.com/v1/chat/completions";
-const MAX_UPLOAD_BYTES      = 300 * 1024 * 1024; // 300 MB hard cap
+const MAX_UPLOAD_BYTES      = 500 * 1024 * 1024; // 500 MB hard cap
+const MAX_DURATION_SECS     = 600;               // 10 minutes
+const STORAGE_BUCKET        = "videos";
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
@@ -108,7 +110,7 @@ Deno.serve(async (req: Request) => {
   if (fileBytes) {
     const uploadTarget = `uploads/${user.id}/${jobId}/${fileName}`;
     const { error: storageErr } = await supabase.storage
-      .from("video-uploads")
+      .from(STORAGE_BUCKET)
       .upload(uploadTarget, fileBytes, { contentType: fileType, upsert: false });
     if (storageErr) {
       console.error("Storage upload error:", storageErr.message);
@@ -225,7 +227,7 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
       // File was pre-uploaded to Storage by the browser to bypass body-size limits
       await setStatus("downloading", "Retrieving file from storage…");
       const { data: blob, error: dlErr } = await supabase.storage
-        .from("video-uploads")
+        .from(STORAGE_BUCKET)
         .download(ctx.storagePath);
       if (dlErr || !blob) {
         await updateLog(supabase, dlLog, "error", `Storage download failed: ${dlErr?.message ?? "No data"}`, "STORAGE_DOWNLOAD_FAILED");
@@ -262,6 +264,28 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
     } else {
       const raw = await Deno.readFile(inputPath);
       hasAudio  = scanBinaryForAudio(raw.slice(0, 131072));
+    }
+
+    // ── Enforce strict limits ───────────────────────────────────────────────
+    // Duration: reject anything longer than 10 minutes
+    if (videoDurationSecs && videoDurationSecs > MAX_DURATION_SECS) {
+      const mins = (videoDurationSecs / 60).toFixed(1);
+      await updateLog(supabase, audioCheckLog, "error",
+        `Video is ${mins} min — exceeds 10-minute limit`,
+        "DURATION_LIMIT_EXCEEDED", Date.now() - audioCheckStart,
+      );
+      throw new Error(`Video is ${mins} minutes long. Maximum allowed is 10 minutes. Please trim the video and try again.`);
+    }
+
+    // File size: reject files over 500 MB (guards against sneaky formats)
+    const { size: fileSizeBytes } = await Deno.stat(inputPath);
+    if (fileSizeBytes > MAX_UPLOAD_BYTES) {
+      const mb = Math.round(fileSizeBytes / 1024 / 1024);
+      await updateLog(supabase, audioCheckLog, "error",
+        `File is ${mb} MB — exceeds 500 MB limit`,
+        "SIZE_LIMIT_EXCEEDED", Date.now() - audioCheckStart,
+      );
+      throw new Error(`File is ${mb} MB. Maximum allowed is 500 MB. Please compress the video and try again.`);
     }
 
     const audioMsg = `Audio Detected: ${hasAudio ? "Yes" : "No"} (method: ${detectionMethod}${videoDurationSecs ? `, duration: ${Math.round(videoDurationSecs)}s` : ""})`;
