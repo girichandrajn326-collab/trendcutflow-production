@@ -714,8 +714,9 @@ export function useAppState() {
 
     // ── Auth token ──────────────────────────────────────────────────────────
     const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) {
+    const token  = session?.access_token;
+    const userId = session?.user?.id;
+    if (!token || !userId) {
       setState(s => ({
         ...s,
         pipelineError: 'Not authenticated. Please sign in again.',
@@ -729,17 +730,34 @@ export function useAppState() {
     // ── Call start-job → get jobId ──────────────────────────────────────────
     let jobId: string;
     try {
-      let body: FormData | string;
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      let body: string;
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
 
       if (source instanceof File) {
-        const fd = new FormData();
-        fd.append('file', source, source.name);
-        body = fd;
-        // Content-Type is set automatically by the browser for FormData
+        // Upload the file directly to Supabase Storage first.
+        // This avoids the ~6 MB edge-function request-body limit that causes
+        // "Failed to fetch" errors for typical video files.
+        const safeName    = source.name.replace(/[^a-z0-9._-]/gi, '_').toLowerCase();
+        const uploadPath  = `uploads/${userId}/${Date.now()}_${safeName}`;
+
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'download', 'active',
+            `Uploading ${(source.size / 1024 / 1024).toFixed(1)} MB…`),
+        }));
+
+        const { error: storageErr } = await supabase.storage
+          .from('video-uploads')
+          .upload(uploadPath, source, { contentType: source.type || 'video/mp4' });
+
+        if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
+
+        body = JSON.stringify({ storagePath: uploadPath, fileName: source.name, fileType: source.type || 'video/mp4' });
       } else {
         body = JSON.stringify({ sourceUrl: source, sourceType: 'youtube' });
-        headers['Content-Type'] = 'application/json';
       }
 
       const res = await fetch(`${supabaseUrl}/functions/v1/start-job`, {

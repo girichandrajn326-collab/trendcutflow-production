@@ -56,10 +56,13 @@ Deno.serve(async (req: Request) => {
   let fileType    = "video/mp4";
   let sourceUrl:  string | null = null;
   let sourceType  = "file";
+  let preUploadedPath: string | null = null; // set when client pre-uploads to Storage
 
   const ct = req.headers.get("Content-Type") ?? "";
 
   if (ct.includes("multipart/form-data")) {
+    // Legacy path — only used if client sends the file directly in the body.
+    // For large files the client should pre-upload to Storage instead.
     let form: FormData;
     try { form = await req.formData(); }
     catch { return json({ error: "Failed to parse multipart form data" }, 400); }
@@ -74,32 +77,44 @@ Deno.serve(async (req: Request) => {
     fileName  = file.name || "video.mp4";
     fileType  = file.type || "video/mp4";
   } else {
-    let body: Record<string, string>;
+    let body: Record<string, unknown>;
     try { body = await req.json(); }
     catch { return json({ error: "Invalid JSON body" }, 400); }
 
-    sourceUrl  = body.sourceUrl?.trim() ?? null;
-    sourceType = body.sourceType ?? "youtube";
-    if (!sourceUrl) return json({ error: "sourceUrl is required for non-file jobs" }, 400);
+    if (typeof body.storagePath === "string" && body.storagePath) {
+      // Client pre-uploaded the file directly to Supabase Storage.
+      // The edge function just needs to know where to fetch it from.
+      preUploadedPath = body.storagePath;
+      fileName        = (body.fileName as string) ?? "video.mp4";
+      fileType        = (body.fileType as string) ?? "video/mp4";
+      sourceType      = "file";
+    } else {
+      sourceUrl  = ((body.sourceUrl as string) ?? "").trim() || null;
+      sourceType = (body.sourceType as string) ?? "youtube";
+      if (!sourceUrl) return json({ error: "sourceUrl is required for non-file jobs" }, 400);
 
-    const isYT = /youtube\.com|youtu\.be/i.test(sourceUrl);
-    if (!isYT) return json({ error: "Only YouTube URLs are supported via URL input" }, 400);
+      const isYT = /youtube\.com|youtu\.be/i.test(sourceUrl);
+      if (!isYT) return json({ error: "Only YouTube URLs are supported via URL input" }, 400);
+    }
   }
 
   // ── Create job ───────────────────────────────────────────────────────────────
   const jobId = crypto.randomUUID();
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "mp4";
 
-  // Upload file bytes to Storage so the job is resumable and auditable
-  let storagePath: string | null = null;
+  // If the client pre-uploaded to Storage, use that path directly.
+  // Otherwise upload the in-memory bytes from a small multipart request.
+  let storagePath: string | null = preUploadedPath;
   if (fileBytes) {
-    storagePath = `uploads/${user.id}/${jobId}/${fileName}`;
+    const uploadTarget = `uploads/${user.id}/${jobId}/${fileName}`;
     const { error: storageErr } = await supabase.storage
       .from("video-uploads")
-      .upload(storagePath, fileBytes, { contentType: fileType, upsert: false });
+      .upload(uploadTarget, fileBytes, { contentType: fileType, upsert: false });
     if (storageErr) {
       console.error("Storage upload error:", storageErr.message);
-      storagePath = null; // will fall back to in-memory bytes
+      // Fall back to in-memory bytes; storagePath stays null
+    } else {
+      storagePath = uploadTarget;
     }
   }
 
@@ -203,8 +218,22 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
     const dlStart = Date.now();
 
     if (ctx.fileBytes) {
+      // Small file sent directly in the multipart body (legacy / dev path)
       await Deno.writeFile(inputPath, ctx.fileBytes);
       await updateLog(supabase, dlLog, "success", `Written ${ctx.fileBytes.byteLength} bytes from upload`, undefined, Date.now() - dlStart);
+    } else if (ctx.storagePath) {
+      // File was pre-uploaded to Storage by the browser to bypass body-size limits
+      await setStatus("downloading", "Retrieving file from storage…");
+      const { data: blob, error: dlErr } = await supabase.storage
+        .from("video-uploads")
+        .download(ctx.storagePath);
+      if (dlErr || !blob) {
+        await updateLog(supabase, dlLog, "error", `Storage download failed: ${dlErr?.message ?? "No data"}`, "STORAGE_DOWNLOAD_FAILED");
+        throw new Error(`Storage download failed: ${dlErr?.message ?? "No data"}`);
+      }
+      const buf = await blob.arrayBuffer();
+      await Deno.writeFile(inputPath, new Uint8Array(buf));
+      await updateLog(supabase, dlLog, "success", `Retrieved ${buf.byteLength} bytes from storage (${ctx.storagePath})`, undefined, Date.now() - dlStart);
     } else if (ctx.sourceType === "youtube" && ctx.sourceUrl) {
       await setStatus("downloading", `Downloading from YouTube: ${ctx.sourceUrl}`);
       await ytdlpDownload(ctx.sourceUrl, inputPath);
