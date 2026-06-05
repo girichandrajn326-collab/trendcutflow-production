@@ -148,6 +148,35 @@ interface JobContext {
   supabase:    any;
 }
 
+// ─── processing_logs helpers ──────────────────────────────────────────────────
+// Mirrors the pattern in process-video / download-video so every step is
+// observable from the Supabase dashboard.
+
+type LogStatus = "pending" | "success" | "error";
+
+// deno-lint-ignore no-explicit-any
+async function insertLog(supabase: any, userId: string, step: string, status: LogStatus, message?: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("processing_logs")
+    .insert({ user_id: userId, step, status, message: message ?? null })
+    .select("id")
+    .maybeSingle();
+  if (error) console.error("insertLog failed:", error.message);
+  return data?.id ?? null;
+}
+
+// deno-lint-ignore no-explicit-any
+async function updateLog(supabase: any, logId: string | null, status: LogStatus, message?: string, errorCode?: string, durationMs?: number): Promise<void> {
+  if (!logId) return;
+  await supabase.from("processing_logs").update({
+    status,
+    message:     message    ?? null,
+    error_code:  errorCode  ?? null,
+    duration_ms: durationMs ?? null,
+    updated_at:  new Date().toISOString(),
+  }).eq("id", logId);
+}
+
 async function runJobBackground(ctx: JobContext): Promise<void> {
   const { jobId, userId, supabase } = ctx;
 
@@ -170,69 +199,141 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
   try {
     // ── 1. Download / write to /tmp ─────────────────────────────────────────
     await setStatus("downloading", "Saving video to processing buffer…");
+    const dlLog   = await insertLog(supabase, userId, "download", "pending");
+    const dlStart = Date.now();
 
     if (ctx.fileBytes) {
       await Deno.writeFile(inputPath, ctx.fileBytes);
+      await updateLog(supabase, dlLog, "success", `Written ${ctx.fileBytes.byteLength} bytes from upload`, undefined, Date.now() - dlStart);
     } else if (ctx.sourceType === "youtube" && ctx.sourceUrl) {
       await setStatus("downloading", `Downloading from YouTube: ${ctx.sourceUrl}`);
       await ytdlpDownload(ctx.sourceUrl, inputPath);
+      await updateLog(supabase, dlLog, "success", `yt-dlp download complete: ${ctx.sourceUrl}`, undefined, Date.now() - dlStart);
     } else {
+      await updateLog(supabase, dlLog, "error", "No input source available", "NO_INPUT_SOURCE");
       throw new Error("No input source available");
     }
 
-    // ── 2. Audio detection ──────────────────────────────────────────────────
+    // ── 2. Pre-flight audio check ───────────────────────────────────────────
+    // Uses ffprobe where available; falls back to a binary marker scan.
+    // Result is logged to processing_logs regardless of which path is taken.
     await setStatus("audio_check", "Probing audio stream…");
+    const audioCheckLog   = await insertLog(supabase, userId, "audio_check", "pending");
+    const audioCheckStart = Date.now();
 
-    let hasAudio = false;
+    let hasAudio          = false;
     let videoDurationSecs: number | undefined;
+    let detectionMethod   = "binary-scan";
 
     const probeResult = await ffprobeJson(inputPath);
     if (probeResult) {
-      hasAudio         = probeResult.streams?.some((s: { codec_type: string }) => s.codec_type === "audio") ?? false;
+      hasAudio          = probeResult.streams?.some((s: { codec_type: string }) => s.codec_type === "audio") ?? false;
       videoDurationSecs = parseFloat(probeResult.format?.duration ?? "0") || undefined;
+      detectionMethod   = "ffprobe";
     } else {
-      // ffprobe not available — binary scan
       const raw = await Deno.readFile(inputPath);
       hasAudio  = scanBinaryForAudio(raw.slice(0, 131072));
     }
 
+    const audioMsg = `Audio Detected: ${hasAudio ? "Yes" : "No"} (method: ${detectionMethod}${videoDurationSecs ? `, duration: ${Math.round(videoDurationSecs)}s` : ""})`;
+    await updateLog(supabase, audioCheckLog, "success", audioMsg, undefined, Date.now() - audioCheckStart);
+
     await supabase.from("processing_jobs").update({
       has_audio:   hasAudio,
-      step_detail: `Audio detected: ${hasAudio ? "Yes" : "No"}`,
+      step_detail: audioMsg,
       updated_at:  new Date().toISOString(),
     }).eq("id", jobId);
 
-    // ── 3–5. Transcribe → Detect (audio path) OR time-based (silent path) ──
+    // ── 3–5. Transcribe → Detect (audio) OR time-based segmentation (silent) ──
     let clips: ClipResult[];
 
     if (hasAudio) {
       // ── 3. Extract 32 kbps mono MP3 with FFmpeg ─────────────────────────
+      // Wrapped in its own try-catch so FFmpeg failures produce a descriptive
+      // error_code in processing_logs instead of a generic crash.
       await setStatus("extracting_audio", "Extracting 32 kbps mono audio with FFmpeg…");
+      const ffmpegLog   = await insertLog(supabase, userId, "audio_extraction", "pending");
+      const ffmpegStart = Date.now();
 
-      const ffmpegOk = await extractAudioMp3(inputPath, audioPath);
-      if (!ffmpegOk) {
-        // FFmpeg absent — send raw video to Whisper if ≤ 25 MB
-        const { size } = await Deno.stat(inputPath);
-        if (size > 24 * 1024 * 1024) {
-          throw new Error(
-            "Video is too large for Whisper (>25 MB) and FFmpeg is unavailable. " +
-            "Please trim the video to under 10 minutes before uploading.",
+      try {
+        const ffmpegOk = await extractAudioMp3(inputPath, audioPath);
+
+        if (ffmpegOk) {
+          await updateLog(supabase, ffmpegLog, "success", "32 kbps mono MP3 extracted", undefined, Date.now() - ffmpegStart);
+        } else {
+          // Binary absent — send raw video to Whisper if small enough
+          const { size } = await Deno.stat(inputPath);
+          if (size > 24 * 1024 * 1024) {
+            await updateLog(supabase, ffmpegLog, "error",
+              `FFmpeg unavailable and file too large for Whisper (${Math.round(size / 1024 / 1024)} MB > 25 MB)`,
+              "FFMPEG_UNAVAILABLE_FILE_TOO_LARGE",
+              Date.now() - ffmpegStart,
+            );
+            throw new Error(
+              "Video is too large for Whisper (>25 MB) and FFmpeg is unavailable. " +
+              "Please trim the video or use a shorter clip.",
+            );
+          }
+          await Deno.copyFile(inputPath, audioPath);
+          await updateLog(supabase, ffmpegLog, "success",
+            "FFmpeg unavailable — forwarding raw video to Whisper (within 25 MB limit)",
+            "FFMPEG_UNAVAILABLE_RAW_FALLBACK",
+            Date.now() - ffmpegStart,
           );
         }
-        await Deno.copyFile(inputPath, audioPath);
+      } catch (ffmpegErr) {
+        // Re-log unexpected errors (e.g. ffmpeg non-zero exit) before re-throwing
+        const alreadyLogged = ffmpegErr instanceof Error &&
+          ffmpegErr.message.startsWith("Video is too large");
+        if (!alreadyLogged) {
+          await updateLog(supabase, ffmpegLog, "error",
+            ffmpegErr instanceof Error ? ffmpegErr.message : String(ffmpegErr),
+            "FFMPEG_NONZERO_EXIT",
+            Date.now() - ffmpegStart,
+          );
+        }
+        throw ffmpegErr;
       }
 
       // ── 4. Whisper transcription ─────────────────────────────────────────
       await setStatus("transcribing", "Transcribing with Groq Whisper…");
+      const whisperLog   = await insertLog(supabase, userId, "transcribe", "pending");
+      const whisperStart = Date.now();
 
-      const { text: transcriptText, words } = await whisperTranscribe(audioPath);
+      let transcriptText: string;
+      let words: TranscriptWord[];
+      try {
+        ({ text: transcriptText, words } = await whisperTranscribe(audioPath));
+        await updateLog(supabase, whisperLog, "success",
+          `Transcribed ${transcriptText.split(" ").length} words`, undefined, Date.now() - whisperStart,
+        );
+      } catch (whisperErr) {
+        await updateLog(supabase, whisperLog, "error",
+          whisperErr instanceof Error ? whisperErr.message : String(whisperErr),
+          "WHISPER_FAILED", Date.now() - whisperStart,
+        );
+        throw whisperErr;
+      }
 
       // ── 5. GPT-4o-mini viral segment detection ───────────────────────────
       await setStatus("detecting", "Detecting viral segments with GPT-4o-mini…");
+      const detectLog   = await insertLog(supabase, userId, "segment_detection", "pending");
+      const detectStart = Date.now();
 
-      const rawClips = await detectClips(transcriptText);
+      let rawClips: RawClip[];
+      try {
+        rawClips = await detectClips(transcriptText);
+        await updateLog(supabase, detectLog, "success",
+          `${rawClips.length} segments identified`, undefined, Date.now() - detectStart,
+        );
+      } catch (detectErr) {
+        await updateLog(supabase, detectLog, "error",
+          detectErr instanceof Error ? detectErr.message : String(detectErr),
+          "SEGMENT_DETECTION_FAILED", Date.now() - detectStart,
+        );
+        throw detectErr;
+      }
 
-      // Attach matching transcript words to each clip
       clips = rawClips.slice(0, 5).map(r => ({
         ...r,
         transcriptWords: words.filter(
@@ -240,17 +341,22 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
         ),
       }));
 
-      // Clamp/scale clip timestamps to actual video duration
       if (videoDurationSecs && videoDurationSecs > 0) {
         clips = clampClips(clips, videoDurationSecs);
       }
     } else {
-      // ── Silent video: time-based 30-second segmentation ──────────────────
-      await setStatus("slicing", "Building time-based visual clips…");
-
+      // ── Silent video: Audio Detected: No ────────────────────────────────
+      // Log the absence of audio explicitly, then skip Whisper entirely and
+      // fall back to even 30-second visual segments.
       const duration = videoDurationSecs ?? 300;
       const count    = Math.min(5, Math.max(1, Math.floor(duration / 30)));
       const seg      = duration / count;
+
+      await insertLog(supabase, userId, "audio_check_no_audio", "success",
+        `Audio Detected: No — Whisper transcription skipped. Fallback: ${count} time-based clips × ${Math.round(seg)}s each (total ${Math.round(duration)}s).`,
+      );
+
+      await setStatus("slicing", "Building time-based visual clips (no audio detected)…");
 
       clips = Array.from({ length: count }, (_, i) => ({
         startTime:       Math.round(i * seg * 10) / 10,
@@ -261,6 +367,10 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
         algorithmicTags: [],
         transcriptWords: [],
       }));
+
+      await insertLog(supabase, userId, "segmentation", "success",
+        `Time-based segmentation complete: ${count} clips generated`,
+      );
     }
 
     // ── 6. Slicing step UI marker ────────────────────────────────────────────
@@ -268,7 +378,10 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
 
     // ── 7. Consume one credit (atomic RPC) ───────────────────────────────────
     const { error: creditErr } = await supabase.rpc("consume_credit", { uid: userId });
-    if (creditErr) console.error("consume_credit failed:", creditErr.message);
+    if (creditErr) {
+      console.error("consume_credit failed:", creditErr.message);
+      await insertLog(supabase, userId, "consume_credit", "error", creditErr.message);
+    }
 
     // ── 8. Persist: video_sources + repurposed_clips ─────────────────────────
     try {
@@ -297,6 +410,9 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
       }
     } catch (persistErr) {
       console.error("DB persist failed (non-fatal):", persistErr);
+      await insertLog(supabase, userId, "db_persist", "error",
+        persistErr instanceof Error ? persistErr.message : String(persistErr),
+      );
     }
 
     // ── 9. Mark completed ────────────────────────────────────────────────────
@@ -313,6 +429,10 @@ async function runJobBackground(ctx: JobContext): Promise<void> {
       },
       updated_at: new Date().toISOString(),
     }).eq("id", jobId);
+
+    await insertLog(supabase, userId, "job_complete", "success",
+      `Job ${jobId} finished — ${clips.length} clips, audio: ${hasAudio ? "Yes" : "No"}`,
+    );
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
