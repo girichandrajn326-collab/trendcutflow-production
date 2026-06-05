@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoStatus } from '../types/database';
-import { transcribeVideo, findViralClips, incrementCredit, checkVideoAudio } from '../lib/ai';
 import type { AuthUser } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 
@@ -168,25 +167,6 @@ export const PLAN_LIMITS: Record<PlanTier, number> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getFileDuration(file: File): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(video.duration); };
-    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read video metadata')); };
-    video.src = url;
-  });
-}
-
-function isYouTubeUrl(url: string): boolean {
-  return /youtube\.com|youtu\.be/i.test(url);
-}
-
-function isInstagramUrl(url: string): boolean {
-  return /instagram\.com/i.test(url);
-}
-
 function generateRandomStyleSeed(): number {
   return 0.97 + Math.random() * 0.03;
 }
@@ -198,30 +178,89 @@ function formatDuration(start: number, end: number): string {
   return `${m}:${s}`;
 }
 
-function sleep(ms: number) {
-  return new Promise<void>(r => setTimeout(r, ms));
+// ─── Job-status → pipeline mapping ───────────────────────────────────────────
+
+const PIPELINE_STEP_ORDER: PipelineStepId[] = [
+  'download', 'audio-check', 'transcribe', 'detect', 'slice', 'subtitles', 'metadata',
+];
+
+// Maps processing_jobs.status → which pipeline step is currently active
+const JOB_STATUS_TO_ACTIVE_STEP: Record<string, PipelineStepId> = {
+  queued:            'download',
+  downloading:       'download',
+  audio_check:       'audio-check',
+  extracting_audio:  'transcribe',
+  transcribing:      'transcribe',
+  detecting:         'detect',
+  slicing:           'slice',
+  completed:         'metadata',
+};
+
+function mapJobStatusToPipeline(
+  current: PipelineStep[],
+  status: string,
+  stepDetail: string | null,
+  hasAudio: boolean | null,
+): PipelineStep[] {
+  const activeId  = JOB_STATUS_TO_ACTIVE_STEP[status] ?? 'download';
+  const activeIdx = PIPELINE_STEP_ORDER.indexOf(activeId);
+  const allDone   = status === 'completed';
+
+  return current.map((step, i) => {
+    const isPast = allDone ? true : i < activeIdx;
+
+    if (isPast) {
+      if (hasAudio === false && (step.id === 'transcribe' || step.id === 'subtitles')) {
+        return { ...step, status: 'skipped', detail: 'Skipped — no audio stream' };
+      }
+      return { ...step, status: 'done' };
+    }
+
+    if (i === activeIdx && !allDone) {
+      return { ...step, status: 'active', detail: stepDetail ?? undefined };
+    }
+
+    return { ...step, status: 'pending' };
+  });
 }
 
-// Fallback segmentation for silent videos — even 30-second visual chunks up to 5 clips.
-function buildNoAudioClips(durationSecs: number): import('../lib/ai').ViralClipResult[] {
-  const count           = Math.min(5, Math.max(1, Math.floor(durationSecs / 30)));
-  const segmentDuration = durationSecs / count;
-  return Array.from({ length: count }, (_, i) => {
-    const start = Math.round(i * segmentDuration * 10) / 10;
-    const end   = Math.round(Math.min((i + 1) * segmentDuration, durationSecs) * 10) / 10;
-    return {
-      startTime: start,
-      endTime:   end,
-      viralTitles: [
-        `Clip ${i + 1} — Visual Segment`,
-        `Part ${i + 1} of ${count}`,
-        `Scene ${i + 1}`,
-      ],
-      seoDescription: `Visual content segment ${i + 1} of ${count}. No audio detected — time-based cut.`,
-      hashtags:        [],
-      algorithmicTags: [],
-    };
-  });
+interface JobResult {
+  hasAudio:          boolean;
+  videoDurationSecs?: number;
+  sourceTitle?:       string;
+  clips: Array<{
+    startTime:       number;
+    endTime:         number;
+    viralTitles:     string[];
+    seoDescription:  string;
+    hashtags:        string[];
+    algorithmicTags: string[];
+    transcriptWords: Array<{ id: number; word: string; start_ms: number; end_ms: number }>;
+  }>;
+}
+
+function buildClipsFromResult(result: JobResult): Clip[] {
+  return result.clips.map((r, i) => ({
+    id:        crypto.randomUUID(),
+    title:     r.viralTitles[0],
+    duration:  formatDuration(r.startTime, r.endTime),
+    thumbnail: THUMBNAIL_POOL[i % THUMBNAIL_POOL.length],
+    startTime: r.startTime,
+    endTime:   r.endTime,
+    transcript: r.transcriptWords.map(w => ({
+      id:      w.id,
+      word:    w.word,
+      startMs: w.start_ms,
+      endMs:   w.end_ms,
+    })),
+    metadata: {
+      viralTitles:     r.viralTitles,
+      seoDescription:  r.seoDescription,
+      hashtags:        r.hashtags,
+      algorithmicTags: r.algorithmicTags,
+    },
+    noAudio: !result.hasAudio,
+  }));
 }
 
 function setStepStatus(
@@ -399,6 +438,8 @@ export function useAppState() {
 
   // Keep a ref for the realtime channel so we can unsubscribe on logout
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Interval that polls processing_jobs while a job is running
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Auth sync ──────────────────────────────────────────────────────────────
 
@@ -494,6 +535,10 @@ export function useAppState() {
       // Cleanup realtime on logout
       realtimeChannelRef.current?.unsubscribe();
       realtimeChannelRef.current = null;
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
     }
   }, []);
 
@@ -637,212 +682,147 @@ export function useAppState() {
   }, []);
 
   // ── Pipeline ───────────────────────────────────────────────────────────────
+  //
+  // New architecture: upload file (or send YouTube URL) to the start-job edge
+  // function which returns a jobId immediately.  Processing runs server-side
+  // inside EdgeRuntime.waitUntil().  The browser polls processing_jobs every
+  // 2 seconds and maps the server status to pipeline steps.
+  //
+  // This eliminates "Failed to fetch" browser timeouts on long videos.
 
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
     if (!source) return;
     if (state.user.videosProcessed >= state.user.totalCredits) return;
 
-    const isUrlSource  = typeof source === 'string';
-    const needsDownload = isUrlSource && (isYouTubeUrl(source) || isInstagramUrl(source));
-
+    // Reset UI immediately
     setState(s => ({
       ...s,
-      screen: 'processing',
-      clips: [],
-      pipeline: INITIAL_PIPELINE.map(step => ({ ...step })),
+      screen:        'processing',
+      clips:         [],
+      pipeline:      INITIAL_PIPELINE.map(step => ({ ...step })),
       pipelineError: null,
     }));
 
-    try {
-      let videoFile: File;
+    setState(s => ({
+      ...s,
+      pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Uploading your video…'),
+    }));
 
-      if (needsDownload) {
-        // ── Step 0: Download via server-side proxy ──────────────────────────
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'active') }));
-
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) throw new Error('Not authenticated. Please sign in again.');
-
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-        const dlRes = await fetch(`${supabaseUrl}/functions/v1/download-video`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({ url: source }),
-        });
-
-        if (!dlRes.ok) {
-          const err = await dlRes.json().catch(() => ({ error: 'Download failed' }));
-          throw new Error(err.error ?? 'Video download failed');
-        }
-
-        const blob  = await dlRes.blob();
-        const title = decodeURIComponent(dlRes.headers.get('X-Video-Title') ?? 'video');
-        videoFile   = new File([blob], `${title}.mp4`, { type: 'video/mp4' });
-
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'done') }));
-      } else {
-        // File upload — mark download step as done immediately
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'download', 'done') }));
-        videoFile = source as File;
-      }
-
-      // ── Step 1: Measure duration ────────────────────────────────────────
-      let videoDurationSecs: number | undefined;
-      videoDurationSecs = await getFileDuration(videoFile).catch(() => undefined);
-
-      // ── Step 2: Pre-flight audio check ─────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'audio-check', 'active') }));
-      const audioCheck = await checkVideoAudio(videoFile);
-      const hasAudio   = audioCheck.hasAudio;
-
+    // ── Auth token ──────────────────────────────────────────────────────────
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
       setState(s => ({
         ...s,
-        pipeline: setStepStatus(
-          s.pipeline, 'audio-check', 'done',
-          hasAudio
-            ? `Audio detected: Yes (${audioCheck.method})`
-            : `Audio detected: No — using visual segmentation (${audioCheck.method})`,
-        ),
+        pipelineError: 'Not authenticated. Please sign in again.',
+        pipeline: setStepStatus(s.pipeline, 'download', 'error'),
       }));
+      return;
+    }
 
-      // ── Steps 3–4: Transcribe + Detect (audio) OR time-based fallback ──
-      let viralResults: import('../lib/ai').ViralClipResult[];
-      let transcriptWords: { id: number; word: string; start_ms: number; end_ms: number }[] = [];
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 
-      if (hasAudio) {
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'active') }));
-        const { text: transcriptText, words } = await transcribeVideo(videoFile);
-        transcriptWords = words;
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'transcribe', 'done') }));
+    // ── Call start-job → get jobId ──────────────────────────────────────────
+    let jobId: string;
+    try {
+      let body: FormData | string;
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
 
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'active') }));
-        viralResults = await findViralClips(transcriptText, videoDurationSecs);
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'detect', 'done') }));
+      if (source instanceof File) {
+        const fd = new FormData();
+        fd.append('file', source, source.name);
+        body = fd;
+        // Content-Type is set automatically by the browser for FormData
       } else {
-        // Silent video — skip Whisper + GPT, segment by visual pacing (30s chunks)
-        setState(s => ({
-          ...s,
-          pipeline: setStepStatus(
-            setStepStatus(s.pipeline, 'transcribe', 'skipped', 'Skipped — no audio stream detected'),
-            'detect', 'skipped', 'Using time-based 30s visual segmentation',
-          ),
-        }));
-        viralResults = buildNoAudioClips(videoDurationSecs ?? 300);
+        body = JSON.stringify({ sourceUrl: source, sourceType: 'youtube' });
+        headers['Content-Type'] = 'application/json';
       }
 
-      // ── Step 4: Slice ───────────────────────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'active') }));
-      await sleep(900);
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'slice', 'done') }));
+      const res = await fetch(`${supabaseUrl}/functions/v1/start-job`, {
+        method: 'POST',
+        headers,
+        body,
+      });
 
-      // ── Step 5: Subtitles ───────────────────────────────────────────────
-      if (hasAudio) {
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'active') }));
-        await sleep(700);
-        setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'subtitles', 'done') }));
-      } else {
-        setState(s => ({
-          ...s,
-          pipeline: setStepStatus(s.pipeline, 'subtitles', 'skipped', 'Skipped — silent video'),
-        }));
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to start job' }));
+        if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
+        if (res.status === 413) throw new Error(err.error ?? 'File too large. Please use a YouTube URL or trim the video.');
+        throw new Error(err.error ?? `Failed to start job (${res.status})`);
       }
 
-      // ── Step 6: Metadata ────────────────────────────────────────────────
-      setState(s => ({ ...s, pipeline: setStepStatus(s.pipeline, 'metadata', 'active') }));
-
-      const videoSourceId = crypto.randomUUID();
-      const urlSource     = isUrlSource ? (source as string) : undefined;
-
-      const newClips: Clip[] = viralResults.map((r, i) => {
-        const clipWords = transcriptWords.filter(
-          w => w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime,
-        );
-        const uiWords: TranscriptWord[] = hasAudio
-          ? (clipWords.length > 0
-              ? clipWords.map(w => ({ id: w.id, word: w.word, startMs: w.start_ms, endMs: w.end_ms }))
-              : [{ id: 0, word: 'Transcript pending', startMs: 0, endMs: 1000 }])
-          : []; // no words for silent video
-
-        return {
-          id: crypto.randomUUID(),
-          videoSourceId,
-          title: r.viralTitles[0],
-          duration: formatDuration(r.startTime, r.endTime),
-          thumbnail: THUMBNAIL_POOL[i % THUMBNAIL_POOL.length],
-          startTime: r.startTime,
-          endTime: r.endTime,
-          transcript: uiWords,
-          metadata: {
-            viralTitles: r.viralTitles,
-            seoDescription: r.seoDescription,
-            hashtags: r.hashtags,
-            algorithmicTags: r.algorithmicTags,
-          },
-          sourceVideoUrl: urlSource,
-          noAudio: !hasAudio,
-        };
-      });
-
-      // Consume credit server-side (atomic, via RPC)
-      incrementCredit().catch(() => {});
-
-      setState(s => {
-        if (s.user.id) {
-          (async () => {
-            const sourceTitle = isUrlSource ? (source as string) : (source as File).name;
-            const { data: vsRow } = await supabase
-              .from('video_sources')
-              .insert({ user_id: s.user.id, title: sourceTitle, source_url: urlSource ?? '', status: 'COMPLETED', duration: 0 })
-              .select('id')
-              .maybeSingle();
-
-            if (vsRow) {
-              await supabase.from('repurposed_clips').insert(
-                newClips.map(c => ({
-                  video_source_id: vsRow.id,
-                  start_time: c.startTime,
-                  end_time: c.endTime,
-                  clip_storage_url: c.thumbnail,
-                  ai_title: c.title,
-                  ai_description: c.metadata.seoDescription,
-                  is_queued: false,
-                  metadata_json: c.metadata,
-                  source_video_url: urlSource ?? '',
-                  transcript_json: { words: c.transcript.map(w => ({ id: w.id, word: w.word, start_ms: w.startMs, end_ms: w.endMs })) },
-                }))
-              );
-            }
-          })().catch(err => console.error('DB persist clips failed:', err));
-        }
-
-        return {
-          ...s,
-          clips: newClips,
-          activeClipIndex: 0,
-          activeWordIndex: 0,
-          pipeline: setStepStatus(s.pipeline, 'metadata', 'done'),
-          screen: 'editor',
-          randomStyleSeed: generateRandomStyleSeed(),
-          user: { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
-        };
-      });
+      const data = await res.json();
+      jobId = data.jobId;
+      if (!jobId) throw new Error('Server did not return a job ID');
 
     } catch (err) {
-      console.error('Pipeline failure:', err);
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = err instanceof Error ? err.message : 'Failed to start processing job';
       setState(s => ({
         ...s,
         pipelineError: msg,
-        pipeline: s.pipeline.map(p => p.status === 'active' ? { ...p, status: 'error' } : p),
+        pipeline: setStepStatus(s.pipeline, 'download', 'error', msg),
       }));
+      return;
     }
+
+    // Job started — mark download as done while server-side work begins
+    setState(s => ({
+      ...s,
+      pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Queued for processing'),
+    }));
+
+    // ── Poll processing_jobs every 2 seconds ────────────────────────────────
+    if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+
+    pollingIntervalRef.current = setInterval(async () => {
+      const { data: job } = await supabase
+        .from('processing_jobs')
+        .select('id, status, step_detail, has_audio, result, error_message')
+        .eq('id', jobId)
+        .maybeSingle();
+
+      if (!job) return;
+
+      // Mirror job status into the visual pipeline
+      setState(s => ({
+        ...s,
+        pipeline: mapJobStatusToPipeline(s.pipeline, job.status, job.step_detail, job.has_audio),
+      }));
+
+      if (job.status === 'completed' && job.result) {
+        clearInterval(pollingIntervalRef.current!);
+        pollingIntervalRef.current = null;
+
+        const newClips = buildClipsFromResult(job.result as JobResult);
+        setState(s => ({
+          ...s,
+          clips:           newClips,
+          activeClipIndex: 0,
+          activeWordIndex: 0,
+          screen:          'editor',
+          randomStyleSeed: generateRandomStyleSeed(),
+          pipeline:        mapJobStatusToPipeline(s.pipeline, 'completed', null, (job.result as JobResult).hasAudio),
+          user:            { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
+        }));
+      }
+
+      if (job.status === 'failed') {
+        clearInterval(pollingIntervalRef.current!);
+        pollingIntervalRef.current = null;
+
+        setState(s => ({
+          ...s,
+          pipelineError: job.error_message ?? 'Processing failed. Please try again.',
+          pipeline: s.pipeline.map(p =>
+            p.status === 'active' ? { ...p, status: 'error' as const } : p,
+          ),
+        }));
+      }
+    }, 2000);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.uploadedFile, state.inputUrl, state.user.videosProcessed, state.user.totalCredits, state.user.id]);
+  }, [state.uploadedFile, state.inputUrl, state.user.videosProcessed, state.user.totalCredits]);
 
   return {
     state,

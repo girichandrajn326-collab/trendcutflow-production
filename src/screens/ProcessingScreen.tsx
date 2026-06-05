@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowLeft, Upload } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Upload, Server } from 'lucide-react';
 import type { PipelineStep } from '../store/appStore';
 
 interface ProcessingScreenProps {
@@ -16,7 +16,9 @@ const CLIP_TITLES = [
 ];
 
 export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: ProcessingScreenProps) {
-  const allDone = pipeline.every(s => s.status === 'done' || s.status === 'skipped');
+  const allDone     = pipeline.every(s => s.status === 'done' || s.status === 'skipped');
+  const doneCount   = pipeline.filter(s => s.status === 'done' || s.status === 'skipped').length;
+  const progressPct = Math.round((doneCount / pipeline.length) * 100);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 pt-16 pb-12">
@@ -44,7 +46,7 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
           <p className="text-slate-400 text-sm mt-2">
             {pipelineError
               ? pipelineError
-              : 'Groq Whisper · GPT-4o-mini · FFmpeg.wasm · Auto-subtitles'}
+              : 'Processing on our servers — you can safely keep this tab open'}
           </p>
         </div>
 
@@ -78,6 +80,30 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
 
         {/* Pipeline steps */}
         <div className="bg-slate-900/60 border border-white/[0.07] rounded-2xl p-5 mb-6">
+
+          {/* Overall progress bar */}
+          {!pipelineError && (
+            <div className="mb-5">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                  <Server size={11} />
+                  <span>Server-side processing</span>
+                </div>
+                <span className="text-xs font-medium text-slate-400">{progressPct}%</span>
+              </div>
+              <div className="w-full h-1 bg-white/[0.06] rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ease-out ${
+                    allDone
+                      ? 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+                      : 'bg-gradient-to-r from-sky-500 to-cyan-400'
+                  }`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="space-y-3">
             {pipeline.map((step) => {
               const isDone    = step.status === 'done';
