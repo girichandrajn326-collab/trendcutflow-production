@@ -473,15 +473,16 @@ export function useAppState() {
         .maybeSingle()
         .then(({ data }) => {
           if (!data) return;
-          const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+          const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
+          const planKey = (data.current_plan ?? '').toLowerCase();
           setState(s => ({
             ...s,
             user: {
               ...s.user,
-              plan:            planMap[data.current_plan] ?? 'free',
-              totalCredits:    data.total_credits,
-              videosProcessed: data.credits_used,
-              credits:         data.credits ?? Math.max(data.total_credits - data.credits_used, 0),
+              plan:            planMap[planKey] ?? 'free',
+              totalCredits:    data.total_credits ?? 1,
+              videosProcessed: data.credits_used ?? 0,
+              credits:         data.credits ?? Math.max((data.total_credits ?? 1) - (data.credits_used ?? 0), 0),
             },
           }));
         });
@@ -500,15 +501,16 @@ export function useAppState() {
               credits_used: number;
               credits: number;
             };
-            const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+            const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
+            const planKey = (d.current_plan ?? '').toLowerCase();
             setState(s => ({
               ...s,
               user: {
                 ...s.user,
-                plan:            planMap[d.current_plan] ?? s.user.plan,
-                totalCredits:    d.total_credits,
-                videosProcessed: d.credits_used,
-                credits:         d.credits ?? Math.max(d.total_credits - d.credits_used, 0),
+                plan:            planMap[planKey] ?? s.user.plan,
+                totalCredits:    d.total_credits  ?? s.user.totalCredits,
+                videosProcessed: d.credits_used   ?? s.user.videosProcessed,
+                credits:         d.credits        ?? s.user.credits,
               },
             }));
           },
@@ -859,15 +861,16 @@ export function useAppState() {
           .maybeSingle()
           .then(({ data }) => {
             if (!data) return;
-            const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+            const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
+            const planKey = (data.current_plan ?? '').toLowerCase();
             setState(s => ({
               ...s,
               user: {
                 ...s.user,
-                plan:            planMap[data.current_plan] ?? s.user.plan,
-                totalCredits:    data.total_credits,
-                videosProcessed: data.credits_used,
-                credits:         data.credits ?? Math.max(data.total_credits - data.credits_used, 0),
+                plan:            planMap[planKey] ?? s.user.plan,
+                totalCredits:    data.total_credits ?? s.user.totalCredits,
+                videosProcessed: data.credits_used  ?? s.user.videosProcessed,
+                credits:         data.credits       ?? s.user.credits,
               },
             }));
           });
