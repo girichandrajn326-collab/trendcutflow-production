@@ -6,8 +6,16 @@
 // POST body: { jobId: string }
 // Auth:      service_role_key (Authorization: Bearer <key>)
 //
+// For storage-path files:
+//   - Generates a 60-second signed URL → passes it directly to ffprobe / ffmpeg.
+//   - The video is NEVER downloaded into /tmp; only the extracted audio MP3 lands there.
+//
+// For YouTube URLs:
+//   - yt-dlp downloads to /tmp (unchanged; streaming yt-dlp output into ffmpeg
+//     is unreliable, so we keep the local file approach for that path).
+//
 // Pipeline:
-//   downloading → audio_check → extracting_audio → transcribing
+//   generating_url → audio_check → extracting_audio → transcribing
 //   → detecting → slicing → completed | failed
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -65,7 +73,7 @@ async function insertLog(
     .insert({ user_id: userId, step, status, message: message ?? null })
     .select("id")
     .maybeSingle();
-  if (error) console.error("insertLog failed:", error.message);
+  if (error) console.error("[insertLog] failed:", error.message);
   return data?.id ?? null;
 }
 
@@ -94,7 +102,6 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
-  // Auth: require service_role_key (passed as Bearer token by start-job or pg_net)
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
 
@@ -104,7 +111,6 @@ Deno.serve(async (req: Request) => {
     { auth: { persistSession: false } },
   );
 
-  // Parse jobId from body
   let jobId: string;
   try {
     const body = await req.json();
@@ -114,24 +120,18 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Invalid body — expected { jobId: string }" }, 400);
   }
 
-  // Load the job row to get context
   const { data: job, error: jobErr } = await sb
     .from("processing_jobs")
     .select("id, user_id, storage_path, source_type, source_url, original_name, status")
     .eq("id", jobId)
     .maybeSingle();
 
-  if (jobErr || !job) {
-    return json({ error: `Job not found: ${jobId}` }, 404);
-  }
+  if (jobErr || !job) return json({ error: `Job not found: ${jobId}` }, 404);
   if (job.status !== "queued") {
-    // Already picked up or completed — idempotent no-op
     return json({ ok: true, skipped: true, status: job.status });
   }
 
-  const ext = (job.original_name ?? "video.mp4").split(".").pop()?.toLowerCase() ?? "mp4";
-
-  // Run the pipeline in the background and return immediately
+  const ext       = (job.original_name ?? "video.mp4").split(".").pop()?.toLowerCase() ?? "mp4";
   const bgPromise = runPipeline(sb, {
     jobId,
     userId:      job.user_id,
@@ -167,10 +167,14 @@ interface PipelineCtx {
 
 async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> {
   const { jobId, userId } = ctx;
-  const inputPath = `/tmp/${jobId}_input.${ctx.ext}`;
-  const audioPath = `/tmp/${jobId}_audio.mp3`;
+
+  // For YouTube we still need a local input file (yt-dlp writes to disk).
+  // For storage-path files we stream via signed URL — no local video file.
+  const ytInputPath = `/tmp/${jobId}_input.${ctx.ext}`;
+  const audioPath   = `/tmp/${jobId}_audio.mp3`;
 
   const setStatus = async (status: string, detail?: string, extra: Record<string, unknown> = {}) => {
+    console.log(`[worker][${jobId}] status=${status} | ${detail ?? ""}`);
     await sb.from("processing_jobs").update({
       status,
       step_detail: detail ?? null,
@@ -179,60 +183,101 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
     }).eq("id", jobId);
   };
 
-  try {
-    // ── 1. Download / write to /tmp ──────────────────────────────────────────
-    await setStatus("downloading", "Saving video to processing buffer…");
-    const dlLog   = await insertLog(sb, userId, "download", "pending");
-    const dlStart = Date.now();
+  // videoInput is either a signed URL (storage) or a local file path (YouTube).
+  let videoInput:  string;
+  let isLocalFile: boolean;
 
+  try {
+    // ── 1. Resolve video source ───────────────────────────────────────────────
     if (ctx.storagePath) {
-      await setStatus("downloading", "Retrieving file from storage…");
-      const { data: blob, error: dlErr } = await sb.storage
+      // ── 1a. Generate signed URL — video never hits /tmp ─────────────────────
+      const urlStep  = "Generating signed URL for storage path…";
+      const urlLog   = await insertLog(sb, userId, "generate_signed_url", "pending", urlStep);
+      const urlStart = Date.now();
+      await setStatus("generating_url", urlStep);
+
+      console.log(`[worker][${jobId}] Calling createSignedUrl for: ${ctx.storagePath}`);
+      const { data: signedData, error: signedErr } = await sb.storage
         .from(STORAGE_BUCKET)
-        .download(ctx.storagePath);
-      if (dlErr || !blob) {
-        await updateLog(sb, dlLog, "error",
-          `Storage download failed: ${dlErr?.message ?? "No data"}`, "STORAGE_DOWNLOAD_FAILED",
-        );
-        throw new Error(`Storage download failed: ${dlErr?.message ?? "No data"}`);
+        .createSignedUrl(ctx.storagePath, 60);
+
+      if (signedErr || !signedData?.signedUrl) {
+        const msg = `Failed to generate signed URL: ${signedErr?.message ?? "No URL returned"}`;
+        await updateLog(sb, urlLog, "error", msg, "SIGNED_URL_FAILED");
+        throw new Error(msg);
       }
-      const buf = await blob.arrayBuffer();
-      await Deno.writeFile(inputPath, new Uint8Array(buf));
-      await updateLog(sb, dlLog, "success",
-        `Retrieved ${buf.byteLength} bytes from storage (${ctx.storagePath})`,
-        undefined, Date.now() - dlStart,
+
+      videoInput  = signedData.signedUrl;
+      isLocalFile = false;
+
+      await updateLog(sb, urlLog, "success",
+        `Signed URL generated (expires in 60s) for ${ctx.storagePath}`,
+        undefined, Date.now() - urlStart,
       );
+      console.log(`[worker][${jobId}] Signed URL ready — bypassing /tmp download`);
+
     } else if (ctx.sourceType === "youtube" && ctx.sourceUrl) {
+      // ── 1b. YouTube — yt-dlp download to /tmp ────────────────────────────────
+      const dlLog   = await insertLog(sb, userId, "download", "pending");
+      const dlStart = Date.now();
       await setStatus("downloading", `Downloading from YouTube: ${ctx.sourceUrl}`);
-      await ytdlpDownload(ctx.sourceUrl, inputPath);
+
+      console.log(`[worker][${jobId}] Starting yt-dlp for: ${ctx.sourceUrl}`);
+      await ytdlpDownload(ctx.sourceUrl, ytInputPath);
       await updateLog(sb, dlLog, "success",
         `yt-dlp complete: ${ctx.sourceUrl}`, undefined, Date.now() - dlStart,
       );
+      console.log(`[worker][${jobId}] yt-dlp complete`);
+
+      videoInput  = ytInputPath;
+      isLocalFile = true;
+
     } else {
+      const dlLog = await insertLog(sb, userId, "download", "error", "No input source");
       await updateLog(sb, dlLog, "error", "No input source available", "NO_INPUT_SOURCE");
       throw new Error("No input source available");
     }
 
-    // ── 2. Pre-flight audio check + limits ───────────────────────────────────
-    await setStatus("audio_check", "Probing audio stream…");
-    const audioCheckLog   = await insertLog(sb, userId, "audio_check", "pending");
+    // ── 2. Pre-flight audio check ─────────────────────────────────────────────
+    const audioCheckMsg  = isLocalFile
+      ? "Probing audio stream with ffprobe (local file)…"
+      : "Probing audio stream with ffprobe (streaming from signed URL)…";
+    const audioCheckLog   = await insertLog(sb, userId, "audio_check", "pending", audioCheckMsg);
     const audioCheckStart = Date.now();
+    await setStatus("audio_check", audioCheckMsg);
 
     let hasAudio          = false;
     let videoDurationSecs: number | undefined;
     let detectionMethod   = "binary-scan";
 
-    const probeResult = await ffprobeJson(inputPath);
+    console.log(`[worker][${jobId}] Running ffprobe on: ${isLocalFile ? "local file" : "signed URL"}`);
+    const probeResult = await ffprobeJson(videoInput);
     if (probeResult) {
       hasAudio          = probeResult.streams?.some((s: { codec_type: string }) => s.codec_type === "audio") ?? false;
       videoDurationSecs = parseFloat(probeResult.format?.duration ?? "0") || undefined;
       detectionMethod   = "ffprobe";
+      console.log(`[worker][${jobId}] ffprobe OK — hasAudio=${hasAudio}, duration=${videoDurationSecs}s`);
     } else {
-      const raw = await Deno.readFile(inputPath);
-      hasAudio  = scanBinaryForAudio(raw.slice(0, 131072));
+      // ffprobe unavailable — fetch the first 128 KB via Range request (URL) or read locally
+      console.log(`[worker][${jobId}] ffprobe unavailable, falling back to binary scan`);
+      if (isLocalFile) {
+        const raw = await Deno.readFile(videoInput);
+        hasAudio  = scanBinaryForAudio(raw.slice(0, 131072));
+      } else {
+        console.log(`[worker][${jobId}] Fetching first 128 KB for binary scan (Range request)`);
+        const rangeRes = await fetch(videoInput, { headers: { Range: "bytes=0-131071" } });
+        if (rangeRes.ok || rangeRes.status === 206) {
+          const chunk = new Uint8Array(await rangeRes.arrayBuffer());
+          hasAudio    = scanBinaryForAudio(chunk);
+          console.log(`[worker][${jobId}] Binary scan complete — hasAudio=${hasAudio}`);
+        } else {
+          console.warn(`[worker][${jobId}] Range request failed (${rangeRes.status}), assuming audio present`);
+          hasAudio = true;
+        }
+      }
     }
 
-    // Duration limit
+    // ── Duration limit ───────────────────────────────────────────────────────
     if (videoDurationSecs && videoDurationSecs > MAX_DURATION_SECS) {
       const mins = (videoDurationSecs / 60).toFixed(1);
       await updateLog(sb, audioCheckLog, "error",
@@ -242,8 +287,17 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
       throw new Error(`Video is ${mins} minutes long. Maximum allowed is 10 minutes.`);
     }
 
-    // File size limit
-    const { size: fileSizeBytes } = await Deno.stat(inputPath);
+    // ── File size check (HEAD request for URLs; stat for local files) ────────
+    console.log(`[worker][${jobId}] Checking file size`);
+    let fileSizeBytes = 0;
+    if (isLocalFile) {
+      const stat = await Deno.stat(videoInput);
+      fileSizeBytes = stat.size;
+    } else {
+      const headRes = await fetch(videoInput, { method: "HEAD" }).catch(() => null);
+      const cl      = headRes?.headers.get("content-length");
+      fileSizeBytes = cl ? parseInt(cl, 10) : 0;
+    }
     if (fileSizeBytes > MAX_UPLOAD_BYTES) {
       const mb = Math.round(fileSizeBytes / 1024 / 1024);
       await updateLog(sb, audioCheckLog, "error",
@@ -255,33 +309,65 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
     const audioMsg = `Audio: ${hasAudio ? "Yes" : "No"} (${detectionMethod}${videoDurationSecs ? `, ${Math.round(videoDurationSecs)}s` : ""})`;
     await updateLog(sb, audioCheckLog, "success", audioMsg, undefined, Date.now() - audioCheckStart);
-    await sb.from("processing_jobs").update({ has_audio: hasAudio, step_detail: audioMsg, updated_at: new Date().toISOString() }).eq("id", jobId);
+    await sb.from("processing_jobs").update({
+      has_audio:   hasAudio,
+      step_detail: audioMsg,
+      updated_at:  new Date().toISOString(),
+    }).eq("id", jobId);
 
-    // ── 3–5. Transcribe or fallback segmentation ─────────────────────────────
+    // ── 3–5. Transcribe or time-based fallback ────────────────────────────────
     let clips: ClipResult[];
 
     if (hasAudio) {
-      // 3. Extract 32 kbps mono MP3
-      await setStatus("extracting_audio", "Extracting 32 kbps mono audio with FFmpeg…");
-      const ffmpegLog   = await insertLog(sb, userId, "audio_extraction", "pending");
+      // 3. Extract 32 kbps mono MP3 — ffmpeg streams from URL/file, writes only audio to /tmp
+      const ffmpegMsg  = isLocalFile
+        ? "Starting FFmpeg stream (local file → audio MP3)…"
+        : "Starting FFmpeg stream (signed URL → audio MP3, video stays in storage)…";
+      const ffmpegLog   = await insertLog(sb, userId, "audio_extraction", "pending", ffmpegMsg);
       const ffmpegStart = Date.now();
+      await setStatus("extracting_audio", ffmpegMsg);
+
+      console.log(`[worker][${jobId}] ${ffmpegMsg}`);
 
       try {
-        const ffmpegOk = await extractAudioMp3(inputPath, audioPath);
+        const ffmpegOk = await extractAudioMp3(videoInput, audioPath);
         if (ffmpegOk) {
-          await updateLog(sb, ffmpegLog, "success", "32 kbps mono MP3 extracted", undefined, Date.now() - ffmpegStart);
-        } else {
-          const { size } = await Deno.stat(inputPath);
-          if (size > 24 * 1024 * 1024) {
-            await updateLog(sb, ffmpegLog, "error",
-              `FFmpeg unavailable and file too large for Whisper (${Math.round(size / 1024 / 1024)} MB > 25 MB)`,
-              "FFMPEG_UNAVAILABLE_FILE_TOO_LARGE", Date.now() - ffmpegStart,
-            );
-            throw new Error("Video is too large for Whisper (>25 MB) and FFmpeg is unavailable.");
-          }
-          await Deno.copyFile(inputPath, audioPath);
+          const audioStat = await Deno.stat(audioPath).catch(() => null);
+          const audioKb   = audioStat ? Math.round(audioStat.size / 1024) : 0;
           await updateLog(sb, ffmpegLog, "success",
-            "FFmpeg unavailable — forwarding raw video to Whisper (within 25 MB limit)",
+            `FFmpeg complete — 32 kbps mono MP3 (${audioKb} KB)`, undefined, Date.now() - ffmpegStart,
+          );
+          console.log(`[worker][${jobId}] FFmpeg OK — audio ${audioKb} KB written to /tmp`);
+        } else {
+          // ffmpeg binary absent — fall back to piping raw bytes to Whisper if small enough
+          console.warn(`[worker][${jobId}] ffmpeg not in PATH, checking fallback`);
+          if (isLocalFile) {
+            const { size } = await Deno.stat(videoInput);
+            if (size > 24 * 1024 * 1024) {
+              await updateLog(sb, ffmpegLog, "error",
+                `FFmpeg unavailable and file too large for Whisper (${Math.round(size / 1024 / 1024)} MB > 25 MB)`,
+                "FFMPEG_UNAVAILABLE_FILE_TOO_LARGE", Date.now() - ffmpegStart,
+              );
+              throw new Error("Video is too large for Whisper (>25 MB) and FFmpeg is unavailable.");
+            }
+            await Deno.copyFile(videoInput, audioPath);
+          } else {
+            // Fetch from URL and write to audioPath as fallback
+            console.log(`[worker][${jobId}] Fetching video bytes from URL as Whisper fallback`);
+            const fetchRes = await fetch(videoInput);
+            if (!fetchRes.ok) throw new Error(`Failed to fetch video for Whisper fallback: ${fetchRes.status}`);
+            const bytes = new Uint8Array(await fetchRes.arrayBuffer());
+            if (bytes.byteLength > 24 * 1024 * 1024) {
+              await updateLog(sb, ffmpegLog, "error",
+                `FFmpeg unavailable and file too large for Whisper (${Math.round(bytes.byteLength / 1024 / 1024)} MB > 25 MB)`,
+                "FFMPEG_UNAVAILABLE_FILE_TOO_LARGE", Date.now() - ffmpegStart,
+              );
+              throw new Error("Video is too large for Whisper (>25 MB) and FFmpeg is unavailable.");
+            }
+            await Deno.writeFile(audioPath, bytes);
+          }
+          await updateLog(sb, ffmpegLog, "success",
+            "FFmpeg unavailable — raw video forwarded to Whisper (within 25 MB limit)",
             "FFMPEG_UNAVAILABLE_RAW_FALLBACK", Date.now() - ffmpegStart,
           );
         }
@@ -290,7 +376,7 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         if (!alreadyLogged) {
           await updateLog(sb, ffmpegLog, "error",
             ffmpegErr instanceof Error ? ffmpegErr.message : String(ffmpegErr),
-            "FFMPEG_NONZERO_EXIT", Date.now() - ffmpegStart,
+            "FFMPEG_ERROR", Date.now() - ffmpegStart,
           );
         }
         throw ffmpegErr;
@@ -298,8 +384,9 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
       // 4. Whisper transcription
       await setStatus("transcribing", "Transcribing with Groq Whisper…");
-      const whisperLog   = await insertLog(sb, userId, "transcribe", "pending");
+      const whisperLog   = await insertLog(sb, userId, "transcribe", "pending", "Sending audio to Groq Whisper large-v3");
       const whisperStart = Date.now();
+      console.log(`[worker][${jobId}] Sending audio to Groq Whisper`);
 
       let transcriptText: string;
       let words: TranscriptWord[];
@@ -308,6 +395,7 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         await updateLog(sb, whisperLog, "success",
           `Transcribed ${transcriptText.split(" ").length} words`, undefined, Date.now() - whisperStart,
         );
+        console.log(`[worker][${jobId}] Whisper complete — ${transcriptText.split(" ").length} words`);
       } catch (whisperErr) {
         await updateLog(sb, whisperLog, "error",
           whisperErr instanceof Error ? whisperErr.message : String(whisperErr),
@@ -318,8 +406,9 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
       // 5. GPT-4o-mini viral segment detection
       await setStatus("detecting", "Detecting viral segments with GPT-4o-mini…");
-      const detectLog   = await insertLog(sb, userId, "segment_detection", "pending");
+      const detectLog   = await insertLog(sb, userId, "segment_detection", "pending", "Sending transcript to GPT-4o-mini");
       const detectStart = Date.now();
+      console.log(`[worker][${jobId}] Sending transcript to GPT-4o-mini`);
 
       let rawClips: RawClip[];
       try {
@@ -327,6 +416,7 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         await updateLog(sb, detectLog, "success",
           `${rawClips.length} segments identified`, undefined, Date.now() - detectStart,
         );
+        console.log(`[worker][${jobId}] GPT-4o-mini returned ${rawClips.length} clips`);
       } catch (detectErr) {
         await updateLog(sb, detectLog, "error",
           detectErr instanceof Error ? detectErr.message : String(detectErr),
@@ -353,6 +443,7 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         `Audio: No — Whisper skipped. Fallback: ${count} time-based clips × ${Math.round(seg)}s`,
       );
       await setStatus("slicing", "Building time-based visual clips (no audio detected)…");
+      console.log(`[worker][${jobId}] No audio — generating ${count} time-based clips`);
 
       clips = Array.from({ length: count }, (_, i) => ({
         startTime:       Math.round(i * seg * 10) / 10,
@@ -367,19 +458,27 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
     await setStatus("slicing", `${clips.length} clips ready. Finalising…`);
 
-    // ── 6. Consume credit ────────────────────────────────────────────────────
+    // ── 6. Consume credit ─────────────────────────────────────────────────────
+    console.log(`[worker][${jobId}] Consuming credit`);
     const { error: creditErr } = await sb.rpc("consume_credit", { uid: userId });
     if (creditErr) {
-      console.error("consume_credit failed:", creditErr.message);
+      console.error(`[worker][${jobId}] consume_credit failed:`, creditErr.message);
       await insertLog(sb, userId, "consume_credit", "error", creditErr.message);
     }
 
-    // ── 7. Persist video_sources + repurposed_clips ──────────────────────────
+    // ── 7. Persist video_sources + repurposed_clips ───────────────────────────
+    console.log(`[worker][${jobId}] Persisting results to DB`);
     try {
       const sourceTitle = ctx.sourceUrl ?? ctx.fileName;
       const { data: vsRow } = await sb
         .from("video_sources")
-        .insert({ user_id: userId, title: sourceTitle, source_url: ctx.sourceUrl ?? "", status: "COMPLETED", duration: videoDurationSecs ?? 0 })
+        .insert({
+          user_id:    userId,
+          title:      sourceTitle,
+          source_url: ctx.sourceUrl ?? "",
+          status:     "COMPLETED",
+          duration:   videoDurationSecs ?? 0,
+        })
         .select("id")
         .maybeSingle();
 
@@ -393,27 +492,38 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
             ai_title:         c.viralTitles[0],
             ai_description:   c.seoDescription,
             is_queued:        false,
-            metadata_json:    { viralTitles: c.viralTitles, seoDescription: c.seoDescription, hashtags: c.hashtags, algorithmicTags: c.algorithmicTags },
+            metadata_json:    {
+              viralTitles:     c.viralTitles,
+              seoDescription:  c.seoDescription,
+              hashtags:        c.hashtags,
+              algorithmicTags: c.algorithmicTags,
+            },
             source_video_url: ctx.sourceUrl ?? "",
             transcript_json:  { words: c.transcriptWords },
           })),
         );
       }
     } catch (persistErr) {
-      console.error("DB persist failed (non-fatal):", persistErr);
+      console.error(`[worker][${jobId}] DB persist failed (non-fatal):`, persistErr);
       await insertLog(sb, userId, "db_persist", "error",
         persistErr instanceof Error ? persistErr.message : String(persistErr),
       );
     }
 
-    // ── 8. Mark completed ────────────────────────────────────────────────────
+    // ── 8. Mark completed ─────────────────────────────────────────────────────
+    console.log(`[worker][${jobId}] Marking job completed`);
     await sb.from("processing_jobs").update({
       status:           "completed",
       step_detail:      `${clips.length} clips extracted`,
       progress:         100,
       credits_consumed: !creditErr,
-      result: { hasAudio, videoDurationSecs, sourceTitle: ctx.sourceUrl ?? ctx.fileName, clips },
-      updated_at:       new Date().toISOString(),
+      result: {
+        hasAudio,
+        videoDurationSecs,
+        sourceTitle: ctx.sourceUrl ?? ctx.fileName,
+        clips,
+      },
+      updated_at: new Date().toISOString(),
     }).eq("id", jobId);
 
     await insertLog(sb, userId, "job_complete", "success",
@@ -422,16 +532,20 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Job ${jobId} failed:`, msg);
+    console.error(`[worker][${jobId}] FAILED:`, msg);
     await sb.from("processing_jobs").update({
       status:        "failed",
       error_message: msg,
       updated_at:    new Date().toISOString(),
     }).eq("id", jobId).catch(() => {});
     await insertLog(sb, userId, "job_failed", "error", msg).catch(() => {});
+
   } finally {
-    await Deno.remove(inputPath).catch(() => {});
+    // Only clean up audio (and YouTube input). Storage-path videos were never written locally.
     await Deno.remove(audioPath).catch(() => {});
+    if (isLocalFile!) {
+      await Deno.remove(ytInputPath).catch(() => {});
+    }
   }
 }
 
@@ -457,10 +571,11 @@ async function ytdlpDownload(url: string, outputPath: string): Promise<void> {
   }
 }
 
-async function ffprobeJson(filePath: string): Promise<Record<string, unknown> | null> {
+// ffprobe accepts both local file paths and HTTP/HTTPS URLs.
+async function ffprobeJson(input: string): Promise<Record<string, unknown> | null> {
   try {
     const cmd = new Deno.Command("ffprobe", {
-      args: ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", filePath],
+      args: ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", input],
       stdout: "piped",
       stderr: "piped",
     });
@@ -472,10 +587,21 @@ async function ffprobeJson(filePath: string): Promise<Record<string, unknown> | 
   }
 }
 
-async function extractAudioMp3(inputPath: string, outputPath: string): Promise<boolean> {
+// ffmpeg accepts both local file paths and HTTP/HTTPS URLs as -i input.
+// For URL inputs the video data streams directly from storage — no /tmp copy.
+async function extractAudioMp3(input: string, outputPath: string): Promise<boolean> {
   try {
     const result = await new Deno.Command("ffmpeg", {
-      args: ["-y", "-i", inputPath, "-vn", "-acodec", "libmp3lame", "-ac", "1", "-ar", "16000", "-ab", "32k", outputPath],
+      args: [
+        "-y",
+        "-i",      input,
+        "-vn",
+        "-acodec", "libmp3lame",
+        "-ac",     "1",      // mono
+        "-ar",     "16000",  // 16 kHz — optimal for Whisper speech recognition
+        "-ab",     "32k",    // 32 kbps — stays well under Whisper's 25 MB limit
+        outputPath,
+      ],
       stdout: "piped",
       stderr: "piped",
     }).output();
@@ -508,7 +634,8 @@ async function whisperTranscribe(audioPath: string): Promise<{ text: string; wor
   }
   const data  = await res.json();
   const words = (data.words ?? []).map((w: { word: string; start: number; end: number }, i: number) => ({
-    id: i, word: w.word,
+    id:       i,
+    word:     w.word,
     start_ms: Math.round(w.start * 1000),
     end_ms:   Math.round(w.end   * 1000),
   }));
