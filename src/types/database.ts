@@ -16,6 +16,7 @@ export interface DbUser {
   current_plan: Plan;
   total_credits: number;
   credits_used: number;
+  credits: number;
   created_at: string;
 }
 
@@ -121,6 +122,7 @@ export function dbUserToAccount(row: DbUser): UserAccount {
     plan: planMap[row.current_plan],
     videosProcessed: row.credits_used,
     totalCredits: row.total_credits,
+    credits: row.credits ?? Math.max(row.total_credits - row.credits_used, 0),
     avatarInitials: initials,
   };
 }
