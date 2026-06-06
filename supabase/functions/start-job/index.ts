@@ -12,7 +12,7 @@ const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
 Deno.serve(async (req: Request) => {
   // 1. Explicitly handle OPTIONS for CORS
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   // 2. Auth logic
