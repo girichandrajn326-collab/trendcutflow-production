@@ -32,7 +32,7 @@ export default function IntakeScreen({
 
   const creditsUsed  = user.videosProcessed;
   const totalCredits = user.totalCredits;
-  const noCredits    = creditsUsed >= totalCredits;
+  const noCredits    = user.credits <= 0;
 
   const urlSource    = inputUrl ? detectUrlSource(inputUrl) : null;
   // Both YouTube and Instagram are valid inputs (server-side download will handle them)

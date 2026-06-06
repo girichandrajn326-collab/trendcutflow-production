@@ -696,7 +696,10 @@ export function useAppState() {
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
     if (!source) return;
-    if (state.user.videosProcessed >= state.user.totalCredits) return;
+    if (state.user.credits <= 0) {
+      setState(s => ({ ...s, isUpgradeModalOpen: true }));
+      return;
+    }
 
     // Reset UI immediately
     setState(s => ({
@@ -776,7 +779,16 @@ export function useAppState() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed to start job' }));
-        if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
+        if (res.status === 402) {
+          setState(s => ({
+            ...s,
+            screen: 'intake',
+            pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
+            pipelineError: null,
+            isUpgradeModalOpen: true,
+          }));
+          return;
+        }
         if (res.status === 413) throw new Error(err.error ?? 'File too large. Please use a YouTube URL or trim the video.');
         throw new Error(err.error ?? `Failed to start job (${res.status})`);
       }
@@ -832,8 +844,33 @@ export function useAppState() {
           screen:          'editor',
           randomStyleSeed: generateRandomStyleSeed(),
           pipeline:        mapJobStatusToPipeline(s.pipeline, 'completed', null, (job.result as JobResult).hasAudio),
-          user:            { ...s.user, videosProcessed: s.user.videosProcessed + 1 },
+          user:            {
+            ...s.user,
+            videosProcessed: s.user.videosProcessed + 1,
+            credits:         Math.max(s.user.credits - 1, 0),
+          },
         }));
+
+        // Re-fetch the authoritative credit balance from DB so the UI stays accurate
+        supabase
+          .from('users')
+          .select('total_credits, credits_used, credits, current_plan')
+          .eq('id', userId)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (!data) return;
+            const planMap: Record<string, PlanTier> = { FREE: 'free', CREATOR: 'creator', PRO: 'pro' };
+            setState(s => ({
+              ...s,
+              user: {
+                ...s.user,
+                plan:            planMap[data.current_plan] ?? s.user.plan,
+                totalCredits:    data.total_credits,
+                videosProcessed: data.credits_used,
+                credits:         data.credits ?? Math.max(data.total_credits - data.credits_used, 0),
+              },
+            }));
+          });
       }
 
       if (job.status === 'failed') {
@@ -851,7 +888,7 @@ export function useAppState() {
     }, 2000);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.uploadedFile, state.inputUrl, state.user.videosProcessed, state.user.totalCredits]);
+  }, [state.uploadedFile, state.inputUrl, state.user.credits]);
 
   return {
     state,
