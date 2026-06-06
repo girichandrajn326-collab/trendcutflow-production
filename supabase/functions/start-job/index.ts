@@ -70,7 +70,7 @@ Deno.serve(async (req: Request) => {
     fileName  = file.name || "video.mp4";
     fileType  = file.type || "video/mp4";
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "mp4";
-    const uploadTarget = `${user.id}/${crypto.randomUUID()}.${ext}`;
+    const uploadTarget = `${user.id}/uploads/${crypto.randomUUID()}.${ext}`;
 
     const fileBytes = new Uint8Array(await file.arrayBuffer());
     const { error: storageErr } = await supabase.storage

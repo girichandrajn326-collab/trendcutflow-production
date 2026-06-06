@@ -742,12 +742,14 @@ export function useAppState() {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
         }
 
-        // Build a UUID-based storage path.
-        // - First segment MUST be the userId UUID so Supabase Storage sets owner_id correctly.
-        // - Filename uses crypto.randomUUID() to guarantee no special characters.
+        // Path structure: {auth.uid()}/uploads/{uuid}.{ext}
+        // - First segment is auth.uid() (a UUID) — Supabase Storage reads owner_id from here.
+        //   Putting any non-UUID string first (e.g. the literal "uploads") causes:
+        //   "invalid input syntax for type uuid: uploads"
+        // - "uploads" sub-folder keeps files organised within the user's space.
+        // - Filename is a random UUID to avoid collisions and special-character issues.
         const ext        = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
-        const fileId     = crypto.randomUUID();
-        const uploadPath = `${userId}/${fileId}.${ext}`;
+        const uploadPath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
 
         setState(s => ({
           ...s,
