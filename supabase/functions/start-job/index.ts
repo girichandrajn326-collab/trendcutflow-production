@@ -6,8 +6,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Authorization, X-Client-Info, Apikey, Content-Type",
 };
 
-const STORAGE_BUCKET   = "videos";
+const STORAGE_BUCKET = "videos";
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 Deno.serve(async (req: Request) => {
   // 1. Explicitly handle OPTIONS for CORS
@@ -49,7 +56,6 @@ Deno.serve(async (req: Request) => {
     const file = form.get("file") as File | null;
     if (!file) return json({ error: "No file field in form data" }, 400);
     
-    // Safety check
     if (file.size > MAX_UPLOAD_BYTES) return json({ error: "File too large" }, 413);
 
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "mp4";
@@ -84,20 +90,23 @@ Deno.serve(async (req: Request) => {
 
   if (insertErr) return json({ error: `DB: ${insertErr.message}` }, 500);
 
-  // 6. Trigger worker (Fire-and-forget)
+  // 6. Trigger worker (Awaiting response to prevent EarlyDrop)
   const workerUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/worker`;
-  fetch(workerUrl, {
+  
+  const workerResponse = await fetch(workerUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}` },
+    headers: { 
+      "Content-Type": "application/json", 
+      "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}` 
+    },
     body: JSON.stringify({ jobId }),
-  }).catch(console.error);
+  });
+
+  if (!workerResponse.ok) {
+    const errorDetails = await workerResponse.text();
+    console.error("Worker trigger failed:", errorDetails);
+    return json({ error: "Job inserted, but worker failed to start.", details: errorDetails }, 500);
+  }
 
   return json({ jobId });
 });
-
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
