@@ -90,23 +90,16 @@ Deno.serve(async (req: Request) => {
 
   if (insertErr) return json({ error: `DB: ${insertErr.message}` }, 500);
 
-  // 6. Trigger worker (Awaiting response to prevent EarlyDrop)
+  // 6. Trigger worker — fire-and-forget; pipeline status is tracked via processing_jobs polling
   const workerUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/worker`;
-  
-  const workerResponse = await fetch(workerUrl, {
+  fetch(workerUrl, {
     method: "POST",
-    headers: { 
-      "Content-Type": "application/json", 
-      "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}` 
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!}`,
     },
     body: JSON.stringify({ jobId }),
-  });
-
-  if (!workerResponse.ok) {
-    const errorDetails = await workerResponse.text();
-    console.error("Worker trigger failed:", errorDetails);
-    return json({ error: "Job inserted, but worker failed to start.", details: errorDetails }, 500);
-  }
+  }).catch((err) => console.error("[start-job] worker trigger error:", err));
 
   return json({ jobId });
 });
