@@ -104,6 +104,10 @@ Deno.serve(async (req: Request) => {
 
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (authHeader !== `Bearer ${serviceKey}`) {
+    return json({ error: "Unauthorized" }, 401);
+  }
 
   const sb = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -149,6 +153,9 @@ Deno.serve(async (req: Request) => {
   } else {
     bgPromise.catch(console.error);
   }
+
+  // Guarantee waitUntil registration is committed before the response closes
+  await new Promise<void>(resolve => setTimeout(resolve, 100));
 
   return json({ ok: true, jobId });
 });
