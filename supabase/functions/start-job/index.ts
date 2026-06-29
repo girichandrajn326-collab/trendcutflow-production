@@ -6,9 +6,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Authorization, X-Client-Info, Apikey, Content-Type",
 };
 
-const STORAGE_BUCKET = "videos";
-const MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
-
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -43,37 +40,12 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Credit limit reached. Please upgrade your plan." }, 402);
   }
 
-  // 4. Request parsing
-  let fileName = "video.mp4";
-  let storagePath: string | null = null;
-  let sourceUrl: string | null = null;
-  let sourceType = "file";
-
-  const contentType = req.headers.get("Content-Type") ?? "";
-
-  if (contentType.includes("multipart/form-data")) {
-    const form = await req.formData();
-    const file = form.get("file") as File | null;
-    if (!file) return json({ error: "No file field in form data" }, 400);
-    
-    if (file.size > MAX_UPLOAD_BYTES) return json({ error: "File too large" }, 413);
-
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "mp4";
-    storagePath = `${user.id}/uploads/${crypto.randomUUID()}.${ext}`;
-
-    const { error: storageErr } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .upload(storagePath, file, { contentType: file.type, upsert: false });
-
-    if (storageErr) return json({ error: `Storage: ${storageErr.message}` }, 500);
-    fileName = file.name;
-  } else {
-    const body = await req.json();
-    storagePath = body.storagePath || null;
-    sourceUrl = body.sourceUrl || null;
-    sourceType = body.sourceType || "youtube";
-    fileName = body.fileName || "video.mp4";
-  }
+  // 4. Request parsing — frontend always uploads directly to Storage and sends JSON
+  const body = await req.json();
+  const storagePath: string | null = body.storagePath || null;
+  const sourceUrl: string | null   = body.sourceUrl   || null;
+  const sourceType: string         = body.sourceType  || "youtube";
+  const fileName: string           = body.fileName    || "video.mp4";
 
   // 5. Database insert
   const jobId = crypto.randomUUID();
