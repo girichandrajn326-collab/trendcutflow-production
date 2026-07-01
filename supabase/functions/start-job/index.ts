@@ -41,11 +41,20 @@ Deno.serve(async (req: Request) => {
   }
 
   // 4. Request parsing — frontend always uploads directly to Storage and sends JSON
-  const body = await req.json();
+  let body: Record<string, string>;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "Invalid request body — expected JSON" }, 400);
+  }
   const storagePath: string | null = body.storagePath || null;
   const sourceUrl: string | null   = body.sourceUrl   || null;
   const sourceType: string         = body.sourceType  || "youtube";
   const fileName: string           = body.fileName    || "video.mp4";
+
+  if (!storagePath && !sourceUrl) {
+    return json({ error: "Request must include storagePath or sourceUrl" }, 400);
+  }
 
   // 5. Database insert
   const jobId = crypto.randomUUID();
