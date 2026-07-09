@@ -187,7 +187,9 @@ const PIPELINE_STEP_ORDER: PipelineStepId[] = [
 // Maps processing_jobs.status → which pipeline step is currently active
 const JOB_STATUS_TO_ACTIVE_STEP: Record<string, PipelineStepId> = {
   queued:            'download',
+  processing:        'download',     // swift-service downloading external URL
   downloading:       'download',
+  generating_url:    'audio-check',  // worker resolved video source, moving to audio check
   audio_check:       'audio-check',
   extracting_audio:  'transcribe',
   transcribing:      'transcribe',
@@ -771,6 +773,14 @@ export function useAppState() {
 
       const body = JSON.stringify({ sourceUrl, userId });
 
+      // Swift-service is now synchronous — it downloads (if needed) and
+      // triggers the worker before responding. Update the label so the user
+      // knows the server is actively working, not just idle.
+      setState(s => ({
+        ...s,
+        pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video (server-side)…'),
+      }));
+
       const SWIFT_SERVICE_URL = 'https://yudfitjlleafafjyiwgg.supabase.co/functions/v1/swift-service';
 
       let res: Response;
@@ -831,10 +841,10 @@ export function useAppState() {
       return;
     }
 
-    // Job started — mark download as done while server-side work begins
+    // Swift-service confirmed the video is in storage and the worker is running.
     setState(s => ({
       ...s,
-      pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Queued for processing'),
+      pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Video ready — AI pipeline started'),
     }));
 
     // ── Poll processing_jobs every 2 seconds ────────────────────────────────
