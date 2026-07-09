@@ -771,26 +771,30 @@ export function useAppState() {
 
       const body = JSON.stringify({ sourceUrl, userId });
 
+      const SWIFT_SERVICE_URL = 'https://yudfitjlleafafjyiwgg.supabase.co/functions/v1/swift-service';
+
       let res: Response;
       try {
-        res = await fetch(`${supabaseUrl}/functions/v1/swift-service`, {
+        res = await fetch(SWIFT_SERVICE_URL, {
           method: 'POST',
           headers,
           body,
         });
       } catch (fetchErr) {
-        console.error('[swift-service] Failed to fetch — network error:', fetchErr);
+        console.error('[swift-service] Network error — could not reach server:', fetchErr);
         throw new Error('Could not reach the server. Check your connection and try again.');
       }
 
       if (!res.ok) {
+        let errBody: string = '';
         let err: { error?: string } = { error: 'Failed to start job' };
         try {
-          err = await res.json();
-        } catch (parseErr) {
-          console.error('[swift-service] Non-JSON error response:', parseErr);
+          errBody = await res.text();
+          err = JSON.parse(errBody);
+        } catch {
+          // errBody is non-JSON; keep raw text for logging
         }
-        console.error(`[swift-service] HTTP ${res.status}:`, err);
+        console.error(`[swift-service] HTTP ${res.status} from ${SWIFT_SERVICE_URL}:`, errBody || err);
         if (res.status === 402) {
           setState(s => ({
             ...s,
@@ -802,12 +806,19 @@ export function useAppState() {
           return;
         }
         if (res.status === 413) throw new Error(err.error ?? 'File too large. Please use a YouTube URL or trim the video.');
-        throw new Error(err.error ?? `Failed to start job (${res.status})`);
+        throw new Error(err.error ?? `swift-service returned ${res.status} — see console for full response`);
       }
 
-      const data = await res.json();
-      jobId = data.jobId;
-      if (!jobId) throw new Error('Server did not return a job ID');
+      let data: { jobId?: string };
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        console.error('[swift-service] Could not parse success response as JSON:', parseErr);
+        throw new Error('Server returned an unreadable response');
+      }
+      console.log('[swift-service] Success response:', data);
+      jobId = data.jobId ?? '';
+      if (!jobId) throw new Error('Server did not return a jobId — check swift-service response shape');
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start processing job';
