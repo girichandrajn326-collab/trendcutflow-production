@@ -732,14 +732,15 @@ export function useAppState() {
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 
-    // ── Call start-job → get jobId ──────────────────────────────────────────
+    // ── Call swift-service → get jobId ─────────────────────────────────────
     let jobId: string;
     try {
-      let body: string;
       const headers: Record<string, string> = {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       };
+
+      let sourceUrl: string;
 
       if (source instanceof File) {
         // Enforce 500 MB hard cap before touching the network
@@ -747,12 +748,6 @@ export function useAppState() {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
         }
 
-        // Path structure: {auth.uid()}/uploads/{uuid}.{ext}
-        // - First segment is auth.uid() (a UUID) — Supabase Storage reads owner_id from here.
-        //   Putting any non-UUID string first (e.g. the literal "uploads") causes:
-        //   "invalid input syntax for type uuid: uploads"
-        // - "uploads" sub-folder keeps files organised within the user's space.
-        // - Filename is a random UUID to avoid collisions and special-character issues.
         const ext        = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
         const uploadPath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
 
@@ -768,19 +763,34 @@ export function useAppState() {
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
 
-        body = JSON.stringify({ storagePath: uploadPath, fileName: source.name, fileType: source.type || 'video/mp4' });
+        // Construct the public storage URL to pass as sourceUrl
+        sourceUrl = `${supabaseUrl}/storage/v1/object/public/videos/${uploadPath}`;
       } else {
-        body = JSON.stringify({ sourceUrl: source, sourceType: 'youtube' });
+        sourceUrl = source;
       }
 
-      const res = await fetch(`${supabaseUrl}/functions/v1/start-job`, {
-        method: 'POST',
-        headers,
-        body,
-      });
+      const body = JSON.stringify({ sourceUrl, userId });
+
+      let res: Response;
+      try {
+        res = await fetch(`${supabaseUrl}/functions/v1/swift-service`, {
+          method: 'POST',
+          headers,
+          body,
+        });
+      } catch (fetchErr) {
+        console.error('[swift-service] Failed to fetch — network error:', fetchErr);
+        throw new Error('Could not reach the server. Check your connection and try again.');
+      }
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Failed to start job' }));
+        let err: { error?: string } = { error: 'Failed to start job' };
+        try {
+          err = await res.json();
+        } catch (parseErr) {
+          console.error('[swift-service] Non-JSON error response:', parseErr);
+        }
+        console.error(`[swift-service] HTTP ${res.status}:`, err);
         if (res.status === 402) {
           setState(s => ({
             ...s,
@@ -801,6 +811,7 @@ export function useAppState() {
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start processing job';
+      console.error('[swift-service] Pipeline trigger failed:', err);
       setState(s => ({
         ...s,
         pipelineError: msg,
