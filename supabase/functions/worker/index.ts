@@ -7,10 +7,11 @@
 // Auth:      service_role_key (Authorization: Bearer <key>)
 //
 // Pipeline (no ffmpeg / ffprobe — pure API calls):
-//   generating_url → transcribing → detecting → slicing → completed | failed
+//   generating_url → downloading → transcribing → detecting → slicing → completed | failed
 //
-// Audio extraction is done by Groq Whisper's URL input — we pass the signed
-// storage URL directly and Groq fetches the audio. No system binaries needed.
+// The worker downloads the video file and uploads it directly to Groq Whisper
+// (more reliable than URL-based input, which requires Groq to fetch from Supabase).
+// No mock/sample fallbacks — if an API call fails, the job fails with a clear error.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -23,8 +24,9 @@ const corsHeaders = {
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const OPENAI_CHAT_URL     = "https://api.openai.com/v1/chat/completions";
 const STORAGE_BUCKET      = "videos";
-const MAX_UPLOAD_BYTES    = 500 * 1024 * 1024;
-const MAX_DURATION_SECS   = 600;
+const MAX_FILE_BYTES      = 100 * 1024 * 1024; // 100 MB — Groq dev-tier upload limit
+const GROQ_TIMEOUT_MS      = 300_000;          // 5 min for transcription
+const OPENAI_TIMEOUT_MS    = 120_000;          // 2 min for clip detection
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,7 +127,6 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, skipped: true, status: job.status });
   }
 
-  const ext       = (job.original_name ?? "video.mp4").split(".").pop()?.toLowerCase() ?? "mp4";
   const bgPromise = runPipeline(sb, {
     jobId,
     userId:      job.user_id,
@@ -133,7 +134,6 @@ Deno.serve(async (req: Request) => {
     sourceUrl:   job.source_url  ?? null,
     sourceType:  job.source_type ?? "file",
     fileName:    job.original_name ?? "video.mp4",
-    ext,
   });
 
   // deno-lint-ignore no-explicit-any
@@ -158,7 +158,6 @@ interface PipelineCtx {
   sourceUrl:   string | null;
   sourceType:  string;
   fileName:    string;
-  ext:         string;
 }
 
 async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> {
@@ -200,74 +199,112 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         `Signed URL generated (expires in 10min) for ${ctx.storagePath}`,
         undefined, Date.now() - urlStart,
       );
-      console.log(`[worker][${jobId}] Signed URL ready: ${videoUrl.slice(0, 80)}…`);
+      console.log(`[worker][${jobId}] Signed URL ready: ${videoUrl.slice(0, 100)}…`);
     } else if (ctx.sourceUrl) {
       videoUrl = ctx.sourceUrl;
-      await setStatus("generating_url", `Using source URL directly`);
+      await setStatus("generating_url", "Using source URL directly");
     } else {
       throw new Error("No input source available");
     }
 
-    // ── 2. File size check via HEAD ──────────────────────────────────────────
-    let fileSizeBytes = 0;
-    const headRes = await fetch(videoUrl, { method: "HEAD" }).catch(() => null);
-    const cl      = headRes?.headers.get("content-length");
-    fileSizeBytes = cl ? parseInt(cl, 10) : 0;
-    if (fileSizeBytes > MAX_UPLOAD_BYTES) {
-      const mb = Math.round(fileSizeBytes / 1024 / 1024);
-      throw new Error(`File is ${mb} MB. Maximum allowed is 500 MB.`);
-    }
-    console.log(`[worker][${jobId}] File size: ${fileSizeBytes ? Math.round(fileSizeBytes/1024/1024) + 'MB' : 'unknown'}`);
+    // ── 2. Verify URL is accessible ──────────────────────────────────────────
+    const verifyLog = await insertLog(sb, userId, "url_access_check", "pending", `Verifying URL accessibility…`);
+    const headRes = await fetch(videoUrl, { method: "HEAD" }).catch((e) => {
+      throw new Error(`HEAD request to storage URL failed: ${e instanceof Error ? e.message : String(e)}`);
+    });
 
-    // ── 3. Transcribe with Groq Whisper (URL-based) ───────────────────────────
+    if (!headRes.ok) {
+      const msg = `Storage URL returned HTTP ${headRes.status} ${headRes.statusText} — URL is not accessible`;
+      await updateLog(sb, verifyLog, "error", msg, "URL_NOT_ACCESSIBLE");
+      throw new Error(msg);
+    }
+
+    const contentLength = headRes.headers.get("content-length");
+    const contentType   = headRes.headers.get("content-type") ?? "unknown";
+    const fileSizeBytes = contentLength ? parseInt(contentLength, 10) : 0;
+
+    await updateLog(sb, verifyLog, "success",
+      `URL accessible — ${fileSizeBytes ? Math.round(fileSizeBytes / 1024 / 1024) + " MB" : "size unknown"}, type: ${contentType}`,
+    );
+    console.log(`[worker][${jobId}] URL verified — size: ${fileSizeBytes ? Math.round(fileSizeBytes / 1024 / 1024) + "MB" : "unknown"}, type: ${contentType}`);
+
+    if (fileSizeBytes > MAX_FILE_BYTES) {
+      const mb = Math.round(fileSizeBytes / 1024 / 1024);
+      const msg = `File is ${mb} MB. Maximum allowed is ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB.`;
+      await updateLog(sb, verifyLog, "error", msg, "FILE_TOO_LARGE");
+      throw new Error(msg);
+    }
+
+    // ── 3. Download video file ───────────────────────────────────────────────
+    await setStatus("downloading", `Downloading video file (${fileSizeBytes ? Math.round(fileSizeBytes / 1024 / 1024) + " MB" : "size unknown"})…`);
+    const dlLog   = await insertLog(sb, userId, "download_video", "pending", "Downloading video from storage");
+    const dlStart = Date.now();
+
+    let videoBytes: Uint8Array;
+    try {
+      const dlRes = await fetch(videoUrl);
+      if (!dlRes.ok) {
+        const msg = `Download failed: HTTP ${dlRes.status} ${dlRes.statusText}`;
+        await updateLog(sb, dlLog, "error", msg, "DOWNLOAD_FAILED");
+        throw new Error(msg);
+      }
+      const buf = await dlRes.arrayBuffer();
+      videoBytes = new Uint8Array(buf);
+    } catch (dlErr) {
+      const msg = `Download failed: ${dlErr instanceof Error ? dlErr.message : String(dlErr)}`;
+      await updateLog(sb, dlLog, "error", msg, "DOWNLOAD_FAILED");
+      throw new Error(msg);
+    }
+
+    await updateLog(sb, dlLog, "success",
+      `Downloaded ${Math.round(videoBytes.length / 1024 / 1024)} MB`,
+      undefined, Date.now() - dlStart,
+    );
+    console.log(`[worker][${jobId}] Downloaded ${videoBytes.length} bytes (${Math.round(videoBytes.length / 1024 / 1024)} MB)`);
+
+    // ── 4. Transcribe with Groq Whisper (direct file upload) ──────────────────
     await setStatus("transcribing", "Transcribing audio with Groq Whisper…");
-    const whisperLog   = await insertLog(sb, userId, "transcribe", "pending", "Sending video URL to Groq Whisper large-v3");
+    const whisperLog   = await insertLog(sb, userId, "transcribe", "pending", `Sending ${Math.round(videoBytes.length / 1024 / 1024)} MB file to Groq Whisper large-v3`);
     const whisperStart = Date.now();
 
-    let transcriptText: string;
-    let words: TranscriptWord[];
-
-    try {
-      ({ text: transcriptText, words } = await whisperTranscribeUrl(videoUrl));
-      await updateLog(sb, whisperLog, "success",
-        `Transcribed ${transcriptText.split(" ").length} words`, undefined, Date.now() - whisperStart,
-      );
-      console.log(`[worker][${jobId}] Whisper complete — ${transcriptText.split(" ").length} words`);
-    } catch (whisperErr) {
-      console.warn(`[worker][${jobId}] URL transcription failed, trying mock:`, whisperErr instanceof Error ? whisperErr.message : String(whisperErr));
-      await updateLog(sb, whisperLog, "error",
-        whisperErr instanceof Error ? whisperErr.message : String(whisperErr),
-        "WHISPER_FAILED", Date.now() - whisperStart,
-      );
-      // Fall back to mock transcript so the pipeline can still complete
-      ({ text: transcriptText, words } = buildMockTranscript());
-      await insertLog(sb, userId, "transcribe_mock", "success", "Used mock transcript (Whisper failed)");
+    // Verify API key exists before calling
+    const GROQ_KEY = Deno.env.get("GROQ_API_KEY");
+    if (!GROQ_KEY) {
+      const msg = "GROQ_API_KEY secret is not configured — cannot transcribe. Add it in your Supabase project settings under Edge Function Secrets.";
+      await updateLog(sb, whisperLog, "error", msg, "GROQ_KEY_MISSING");
+      throw new Error(msg);
     }
 
-    // ── 4. GPT-4o-mini viral segment detection ───────────────────────────────
+    const { text: transcriptText, words } = await whisperTranscribeFile(videoBytes, ctx.fileName, GROQ_KEY);
+
+    await updateLog(sb, whisperLog, "success",
+      `Transcribed ${transcriptText.split(/\s+/).filter(Boolean).length} words from ${Math.round(videoBytes.length / 1024 / 1024)} MB file`,
+      undefined, Date.now() - whisperStart,
+    );
+    console.log(`[worker][${jobId}] Whisper complete — ${transcriptText.split(/\s+/).filter(Boolean).length} words, ${words.length} word-timestamps`);
+
+    // ── 5. GPT-4o-mini viral segment detection ───────────────────────────────
     await setStatus("detecting", "Detecting viral segments with GPT-4o-mini…");
     const detectLog   = await insertLog(sb, userId, "segment_detection", "pending", "Sending transcript to GPT-4o-mini");
     const detectStart = Date.now();
 
-    let rawClips: RawClip[];
-    try {
-      rawClips = await detectClips(transcriptText);
-      await updateLog(sb, detectLog, "success",
-        `${rawClips.length} segments identified`, undefined, Date.now() - detectStart,
-      );
-      console.log(`[worker][${jobId}] GPT-4o-mini returned ${rawClips.length} clips`);
-    } catch (detectErr) {
-      console.warn(`[worker][${jobId}] Detection failed, using mock:`, detectErr instanceof Error ? detectErr.message : String(detectErr));
-      await updateLog(sb, detectLog, "error",
-        detectErr instanceof Error ? detectErr.message : String(detectErr),
-        "SEGMENT_DETECTION_FAILED", Date.now() - detectStart,
-      );
-      rawClips = buildMockClips();
-      await insertLog(sb, userId, "segment_detection_mock", "success", "Used mock clips (GPT failed)");
+    const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_KEY) {
+      const msg = "OPENAI_API_KEY secret is not configured — cannot detect clips. Add it in your Supabase project settings under Edge Function Secrets.";
+      await updateLog(sb, detectLog, "error", msg, "OPENAI_KEY_MISSING");
+      throw new Error(msg);
     }
 
-    // ── 5. Build clip results with transcript words ──────────────────────────
-    let clips: ClipResult[] = rawClips.slice(0, 5).map(r => ({
+    const rawClips = await detectClips(transcriptText, OPENAI_KEY);
+
+    await updateLog(sb, detectLog, "success",
+      `${rawClips.length} segments identified by GPT-4o-mini`,
+      undefined, Date.now() - detectStart,
+    );
+    console.log(`[worker][${jobId}] GPT-4o-mini returned ${rawClips.length} clips`);
+
+    // ── 6. Build clip results with transcript words ──────────────────────────
+    const clips: ClipResult[] = rawClips.slice(0, 5).map(r => ({
       ...r,
       transcriptWords: words.filter(
         w => w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime,
@@ -276,15 +313,18 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 
     await setStatus("slicing", `${clips.length} clips ready. Finalising…`);
 
-    // ── 6. Consume credit ────────────────────────────────────────────────────
+    // ── 7. Consume credit ────────────────────────────────────────────────────
     console.log(`[worker][${jobId}] Consuming credit`);
+    let creditConsumed = false;
     const { error: creditErr } = await sb.rpc("consume_credit", { uid: userId });
     if (creditErr) {
       console.error(`[worker][${jobId}] consume_credit failed:`, creditErr.message);
       await insertLog(sb, userId, "consume_credit", "error", creditErr.message);
+    } else {
+      creditConsumed = true;
     }
 
-    // ── 7. Persist video_sources + repurposed_clips ──────────────────────────
+    // ── 8. Persist video_sources + repurposed_clips ──────────────────────────
     console.log(`[worker][${jobId}] Persisting results to DB`);
     try {
       const sourceTitle = ctx.sourceUrl ?? ctx.fileName;
@@ -328,29 +368,31 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
       );
     }
 
-    // ── 8. Mark completed ────────────────────────────────────────────────────
-    console.log(`[worker][${jobId}] Marking job completed`);
+    // ── 9. Mark completed with REAL results ──────────────────────────────────
+    console.log(`[worker][${jobId}] Marking job completed with real transcript + clips`);
     await sb.from("processing_jobs").update({
       status:           "completed",
-      step_detail:      `${clips.length} clips extracted`,
+      step_detail:      `${clips.length} clips extracted from real transcript`,
       progress:         100,
-      credits_consumed: !creditErr,
+      credits_consumed: creditConsumed,
       result: {
-        hasAudio:        true,
+        hasAudio:          true,
         videoDurationSecs: 0,
-        sourceTitle:     ctx.sourceUrl ?? ctx.fileName,
+        sourceTitle:       ctx.sourceUrl ?? ctx.fileName,
         clips,
+        transcriptPreview: transcriptText.slice(0, 500),
       },
       updated_at: new Date().toISOString(),
     }).eq("id", jobId);
 
     await insertLog(sb, userId, "job_complete", "success",
-      `Job ${jobId} finished — ${clips.length} clips`,
+      `Job ${jobId} finished — ${clips.length} clips from real transcript (${transcriptText.split(/\s+/).filter(Boolean).length} words)`,
     );
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[worker][${jobId}] FAILED:`, msg);
+    if (err instanceof Error && err.stack) console.error(`[worker][${jobId}] Stack:`, err.stack);
     await sb.from("processing_jobs").update({
       status:        "failed",
       error_message: msg,
@@ -363,55 +405,96 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
 // ─── Pipeline helpers ─────────────────────────────────────────────────────────
 
 /**
- * Transcribe audio from a URL using Groq Whisper.
- * Groq's API accepts a `url` field instead of a `file` upload for remote media.
- * This avoids needing ffmpeg to extract audio locally.
+ * Transcribe audio by uploading the file directly to Groq Whisper.
+ * Direct upload is more reliable than URL-based input because:
+ *   - No dependency on Groq being able to reach Supabase Storage
+ *   - We control the download and can verify the file
+ *   - We get immediate error feedback
+ *
+ * Throws on any failure — the caller must handle the error (no mock fallback).
  */
-async function whisperTranscribeUrl(videoUrl: string): Promise<{ text: string; words: TranscriptWord[] }> {
-  const GROQ_KEY = Deno.env.get("GROQ_API_KEY");
-  if (!GROQ_KEY) throw new Error("GROQ_API_KEY secret is not configured");
+async function whisperTranscribeFile(
+  videoBytes: Uint8Array,
+  fileName:   string,
+  groqKey:    string,
+): Promise<{ text: string; words: TranscriptWord[] }> {
+  // Determine a valid audio/video filename for Groq
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "mp4";
+  const groqFileName = `video.${ext}`;
 
   const form = new FormData();
-  form.append("url",                      videoUrl);
-  form.append("model",                     "whisper-large-v3");
+  form.append("file",                     new Blob([videoBytes], { type: guessMimeType(ext) }), groqFileName);
+  form.append("model",                    "whisper-large-v3");
   form.append("response_format",           "verbose_json");
   form.append("timestamp_granularities[]", "word");
 
-  const res = await fetch(GROQ_TRANSCRIBE_URL, {
-    method:  "POST",
-    headers: { Authorization: `Bearer ${GROQ_KEY}` },
-    body:    form,
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Groq Whisper failed (${res.status}): ${errText.slice(0, 400)}`);
+  console.log(`[worker] Sending ${Math.round(videoBytes.length / 1024 / 1024)} MB to Groq as ${groqFileName}`);
+
+  const controller = new AbortController();
+  const timeout     = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(GROQ_TRANSCRIBE_URL, {
+      method:  "POST",
+      headers: { Authorization: `Bearer ${groqKey}` },
+      body:    form,
+      signal:  controller.signal,
+    });
+  } catch (fetchErr) {
+    clearTimeout(timeout);
+    if (fetchErr instanceof Error && fetchErr.name === "AbortError") {
+      throw new Error(`Groq Whisper timed out after ${GROQ_TIMEOUT_MS / 1000}s while transcribing ${Math.round(videoBytes.length / 1024 / 1024)} MB file`);
+    }
+    throw new Error(`Groq Whisper fetch failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
   }
-  const data  = await res.json();
-  const words = (data.words ?? []).map((w: { word: string; start: number; end: number }, i: number) => ({
-    id:       i,
-    word:     w.word,
-    start_ms: Math.round(w.start * 1000),
-    end_ms:   Math.round(w.end   * 1000),
-  }));
-  return { text: data.text ?? "", words };
+  clearTimeout(timeout);
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "(no response body)");
+    throw new Error(`Groq Whisper returned HTTP ${res.status} ${res.statusText}: ${errText.slice(0, 1000)}`);
+  }
+
+  const data = await res.json();
+  const words: TranscriptWord[] = (data.words ?? []).map(
+    (w: { word: string; start: number; end: number }, i: number) => ({
+      id:       i,
+      word:     w.word,
+      start_ms: Math.round(w.start * 1000),
+      end_ms:   Math.round(w.end   * 1000),
+    }),
+  );
+
+  const text = data.text ?? "";
+  if (!text && words.length === 0) {
+    throw new Error("Groq Whisper returned an empty transcript — the video may have no audio track, or the audio codec is not supported.");
+  }
+
+  return { text, words };
 }
 
-async function detectClips(transcriptText: string): Promise<RawClip[]> {
-  const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY");
-  if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY secret is not configured");
+/**
+ * Detect viral clips from a transcript using GPT-4o-mini.
+ * Throws on any failure — the caller must handle the error (no mock fallback).
+ */
+async function detectClips(transcriptText: string, openaiKey: string): Promise<RawClip[]> {
+  const controller = new AbortController();
+  const timeout     = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
 
-  const res = await fetch(OPENAI_CHAT_URL, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${OPENAI_KEY}` },
-    body: JSON.stringify({
-      model:           "gpt-4o-mini",
-      temperature:     0.7,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You are an elite viral video producer." },
-        {
-          role: "user",
-          content: `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
+  let res: Response;
+  try {
+    res = await fetch(OPENAI_CHAT_URL, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model:           "gpt-4o-mini",
+        temperature:     0.7,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You are an elite viral video producer." },
+          {
+            role: "user",
+            content: `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
 
 For each segment provide:
 - startTime: start timestamp in seconds (float)
@@ -425,46 +508,67 @@ Respond with valid JSON only: { "clips": [ ... ] }
 
 Transcript:
 ${transcriptText}`,
-        },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OpenAI GPT-4o-mini failed (${res.status}): ${errText.slice(0, 400)}`);
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } catch (fetchErr) {
+    clearTimeout(timeout);
+    if (fetchErr instanceof Error && fetchErr.name === "AbortError") {
+      throw new Error(`OpenAI GPT-4o-mini timed out after ${OPENAI_TIMEOUT_MS / 1000}s`);
+    }
+    throw new Error(`OpenAI fetch failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
   }
+  clearTimeout(timeout);
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "(no response body)");
+    throw new Error(`OpenAI GPT-4o-mini returned HTTP ${res.status} ${res.statusText}: ${errText.slice(0, 1000)}`);
+  }
+
   const data    = await res.json();
-  const content = data.choices?.[0]?.message?.content ?? '{"clips":[]}';
-  const parsed  = JSON.parse(content);
-  const clips   = Array.isArray(parsed)
+  const content = data.choices?.[0]?.message?.content ?? "";
+  if (!content) {
+    throw new Error("OpenAI GPT-4o-mini returned an empty response (no content in choices[0].message.content)");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (parseErr) {
+    throw new Error(`OpenAI GPT-4o-mini returned invalid JSON: ${content.slice(0, 500)} (parse error: ${parseErr instanceof Error ? parseErr.message : String(parseErr)})`);
+  }
+
+  const clips = Array.isArray(parsed)
     ? parsed
-    : (parsed.clips ?? parsed.segments ?? Object.values(parsed).find(Array.isArray) ?? []);
+    : (parsed as Record<string, unknown>)?.clips
+      ?? (parsed as Record<string, unknown>)?.segments
+      ?? Object.values(parsed).find((v): v is unknown[] => Array.isArray(v))
+      ?? [];
+
+  if (!Array.isArray(clips) || clips.length === 0) {
+    throw new Error(`OpenAI GPT-4o-mini returned no clips. Response was: ${content.slice(0, 500)}`);
+  }
+
   return clips as RawClip[];
 }
 
-// ─── Mock fallbacks (used when API keys are missing or calls fail) ───────────
-
-function buildMockTranscript(): { text: string; words: TranscriptWord[] } {
-  const SAMPLE = `The single biggest shift I made was stop selling features and start selling outcomes. Nobody cares what your product does. They care about what their life looks like after they buy it. The moment I rewired my messaging around that one principle my conversion rate jumped from two percent to eleven percent in under sixty days. Most creators quit at exactly the wrong moment. They spend ninety days making content see no results and give up right before the algorithm would have rewarded them. I studied two hundred accounts that blew up. Here is the exact cold email structure. Line one is a hyper specific compliment about something they actually published. Line two is one sentence about your credibility. Line three is the offer framed as a result. When I started sharing my actual revenue numbers my following tripled in four months. At two in the morning I almost lost a ten thousand dollar client because my price was too low. They literally said you are too cheap to be credible.`;
-  const tokens = SAMPLE.split(" ");
-  let ms = 0;
-  const words = tokens.map((word: string, i: number) => {
-    const dur = 220 + Math.random() * 280;
-    const w = { id: i, word, start_ms: ms, end_ms: Math.round(ms + dur) };
-    ms = Math.round(ms + dur + 60);
-    return w;
-  });
-  return { text: SAMPLE, words };
-}
-
-function buildMockClips(): RawClip[] {
-  return [
-    { startTime: 0,   endTime: 58,  viralTitles: ["I Changed ONE Thing & Made 5x More Revenue in 60 Days", "Stop Selling Features (Do This Instead)", "The Mindset That Took Me From 2% to 11% Conversion Rate"], seoDescription: "Discover the single mindset shift that transformed my business revenue.", hashtags: ["#BusinessGrowth","#SalesTips","#Entrepreneur","#RevenueGrowth","#MindsetShift","#ConversionRate"], algorithmicTags: ["mindset shift business","increase conversion rate","sales strategy 2024","entrepreneur tips","business revenue growth"] },
-    { startTime: 62,  endTime: 124, viralTitles: ["Most Creators Quit RIGHT Before Going Viral (Here's Proof)", "The Algorithm Rewards This One Thing (It's Not Talent)", "I Studied 200 Viral Accounts — They All Did This"], seoDescription: "After studying 200+ creator accounts that went viral, I found a shocking pattern.", hashtags: ["#ContentCreator","#YouTubeTips","#ViralContent","#CreatorEconomy","#SocialMediaGrowth","#ConsistencyIsKey"], algorithmicTags: ["creator tips going viral","youtube algorithm 2024","content creator strategy","grow on social media","consistency content creation"] },
-    { startTime: 130, endTime: 184, viralTitles: ["The 5-Line Cold Email That Gets 40% Reply Rates", "I Sent 10,000 Cold Emails — Here's What Actually Works", "Copy This Cold Email Formula (40% Response Rate)"], seoDescription: "After 10,000+ cold emails sent, I've refined a 5-line formula.", hashtags: ["#ColdEmail","#EmailMarketing","#LeadGeneration","#SalesTips","#OutreachStrategy","#B2BSales"], algorithmicTags: ["cold email tips","email outreach strategy","b2b sales tactics","lead generation emails","sales email template"] },
-    { startTime: 190, endTime: 255, viralTitles: ["I Shared My Real Revenue Numbers — My Following Tripled", "Build in Public: The Growth Strategy Nobody Talks About", "Why Showing Your Failures Online Is the Best Marketing"], seoDescription: "By sharing real revenue and real failures, I tripled my following in 4 months.", hashtags: ["#BuildInPublic","#CreatorEconomy","#Transparency","#PersonalBrand","#StartupLife","#ContentStrategy"], algorithmicTags: ["build in public strategy","personal brand growth","creator transparency","grow following fast","authentic content marketing"] },
-    { startTime: 260, endTime: 311, viralTitles: ["A Client Said I Was 'Too Cheap to Be Credible' — So I Raised Prices", "Raising My Prices 40% Got Me MORE Clients (Here's Why)", "The 2AM Lesson That Changed My Entire Pricing Strategy"], seoDescription: "When a prospect said I was 'too cheap to be credible,' I raised my prices 40%.", hashtags: ["#PricingStrategy","#Freelance","#BusinessTips","#Consulting","#ValueBasedPricing","#Entrepreneurship"], algorithmicTags: ["pricing strategy business","raise your prices","value based pricing","freelancer tips","consulting pricing"] },
-  ];
+function guessMimeType(ext: string): string {
+  const map: Record<string, string> = {
+    mp4:  "video/mp4",
+    m4a:  "audio/mp4",
+    mp3:  "audio/mpeg",
+    mpeg: "video/mpeg",
+    mpga: "audio/mpeg",
+    ogg:  "audio/ogg",
+    wav:  "audio/wav",
+    webm: "video/webm",
+    flac: "audio/flac",
+    mov:  "video/quicktime",
+    avi:  "video/x-msvideo",
+  };
+  return map[ext] ?? "video/mp4";
 }
 
 function json(data: unknown, status = 200) {
