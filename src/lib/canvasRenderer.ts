@@ -45,20 +45,6 @@ export function renderClipWithSubtitles(
       URL.revokeObjectURL(video.src);
     }
 
-    function getActiveWord(videoCurrentTime: number): string | null {
-      const elapsed = videoCurrentTime - startTime;
-      const elapsedMs = elapsed * 1000;
-      for (const w of words) {
-        if (elapsedMs >= w.startMs && elapsedMs <= w.endMs) return w.word;
-      }
-      // Find the most recently passed word
-      let last: string | null = null;
-      for (const w of words) {
-        if (elapsedMs >= w.startMs) last = w.word;
-      }
-      return last;
-    }
-
     function getWindowWords(videoCurrentTime: number): { word: string; active: boolean }[] {
       const elapsed = videoCurrentTime - startTime;
       const elapsedMs = elapsed * 1000;
@@ -131,10 +117,6 @@ export function renderClipWithSubtitles(
         const lines = chunkWords(windowWords, 3);
         lines.forEach((line, li) => {
           const y = bottomY - (lines.length - 1 - li) * lineH;
-          line.forEach(({ word, active }) => {
-            // Measure to position words
-          });
-          // Draw line as single string with highlight on active word
           const lineText = line.map(w => w.word.toUpperCase()).join(' ');
           c.strokeStyle = '#000';
           c.lineWidth = 6;
@@ -164,9 +146,6 @@ export function renderClipWithSubtitles(
         const lines = chunkWords(windowWords, 3);
         lines.forEach((line, li) => {
           const y = bottomY - (lines.length - 1 - li) * lineH;
-          line.forEach(({ word, active }) => {
-            // Draw each word separately for active highlight
-          });
           const lineText = line.map(w => w.word).join(' ');
           if (line.some(w => w.active)) {
             c.shadowColor = '#00E5FF';

@@ -15,7 +15,7 @@ function getStyleSeedVariation(seed: number): CSSProperties {
     fontSize: `${seed * 100}%`,
   };
 }
-import { calculateSchedule, formatScheduledTime, formatScheduledShort, executePublish } from '../lib/publishQueue';
+import { formatScheduledTime, formatScheduledShort, executePublish } from '../lib/publishQueue';
 import { trimVideoClip } from '../lib/videoProcessor';
 import { burnSubtitles } from '../lib/ffmpegClient';
 import { renderClipWithSubtitles } from '../lib/canvasRenderer';
@@ -573,7 +573,7 @@ export default function EditorScreen({
                     onSetActiveWord(i);
                     setEditingWordIdx(i);
                   }}
-                  onCommit={(val) => commitWordEdit(i, val)}
+                  onCommit={(val: string) => commitWordEdit(i, val)}
                 />
               ))}
             </div>

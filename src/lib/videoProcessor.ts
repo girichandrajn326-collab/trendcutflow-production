@@ -58,10 +58,8 @@ async function getFFmpeg(): Promise<FFmpegInstance> {
       throw new Error('SharedArrayBuffer requires cross-origin isolation (COOP/COEP headers).');
     }
 
-    const { FFmpeg } = await import(
-      /* @vite-ignore */
-      'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js'
-    );
+    const ffmpegUrl = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
+    const { FFmpeg } = await import(/* @vite-ignore */ ffmpegUrl);
 
     const instance: FFmpegInstance = new FFmpeg();
     await instance.load({

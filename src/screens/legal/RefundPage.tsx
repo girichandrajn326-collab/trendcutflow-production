@@ -1,4 +1,4 @@
-import { ArrowLeft, RefreshCcw, CheckCircle2, Clock, CreditCard, Mail } from 'lucide-react';
+import { ArrowLeft, RefreshCcw, Clock, CreditCard, Mail } from 'lucide-react';
 
 interface LegalPageProps {
   onBack: () => void;

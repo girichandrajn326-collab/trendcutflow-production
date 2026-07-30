@@ -1,21 +1,14 @@
-import { AlertCircle, ArrowLeft, Upload, Server } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Upload, Server, Sparkles } from 'lucide-react';
 import type { PipelineStep } from '../store/appStore';
 
 interface ProcessingScreenProps {
   pipeline: PipelineStep[];
   pipelineError: string | null;
   onGoBack?: () => void;
+  onViewClips?: () => void;
 }
 
-const CLIP_TITLES = [
-  "The Mindset Shift That 10x'd My Revenue",
-  'Why 99% of Creators Quit Before Going Viral',
-  'The Cold Email Formula That Gets 40% Replies',
-  'Build in Public: How Transparency Tripled My Following',
-  'The 2AM Lesson That Changed How I Price Everything',
-];
-
-export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: ProcessingScreenProps) {
+export default function ProcessingScreen({ pipeline, pipelineError, onGoBack, onViewClips }: ProcessingScreenProps) {
   const allDone     = pipeline.every(s => s.status === 'done' || s.status === 'skipped');
   const doneCount   = pipeline.filter(s => s.status === 'done' || s.status === 'skipped').length;
   const progressPct = Math.round((doneCount / pipeline.length) * 100);
@@ -41,11 +34,13 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
             {pipelineError ? 'Processing Failed' : allDone ? 'Clips Ready' : 'AI Processing Your Video'}
           </div>
           <h2 className="text-3xl font-bold text-white">
-            {pipelineError ? 'Something Went Wrong' : 'Extracting Viral Moments'}
+            {pipelineError ? 'Something Went Wrong' : allDone ? 'Your Clips Are Ready' : 'Extracting Viral Moments'}
           </h2>
           <p className="text-slate-400 text-sm mt-2">
             {pipelineError
               ? pipelineError
+              : allDone
+              ? 'All processing complete — your viral shorts are waiting in the editor'
               : 'Processing on our servers — you can safely keep this tab open'}
           </p>
         </div>
@@ -161,15 +156,35 @@ export default function ProcessingScreen({ pipeline, pipelineError, onGoBack }: 
           </div>
         </div>
 
-        {/* Skeleton preview cards */}
-        <div className="space-y-3">
-          <p className="text-xs text-slate-600 font-medium uppercase tracking-wider mb-2">
-            Extracting 5 Viral Clips
-          </p>
-          {CLIP_TITLES.map((title, i) => (
-            <SkeletonCard key={i} index={i} title={title} />
-          ))}
-        </div>
+        {/* Completion CTA or skeleton preview cards */}
+        {allDone && !pipelineError ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-emerald-500/[0.08] border border-emerald-500/20">
+              <Sparkles size={16} className="text-emerald-400 flex-shrink-0" />
+              <p className="text-emerald-300 text-sm font-medium">
+                All 5 viral clips have been extracted and are ready to edit.
+              </p>
+            </div>
+            {onViewClips && (
+              <button
+                onClick={onViewClips}
+                className="w-full py-3.5 rounded-xl font-bold text-sm bg-gradient-to-r from-sky-500 to-cyan-500 text-white hover:from-sky-400 hover:to-cyan-400 transition-all flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20"
+              >
+                <Sparkles size={16} />
+                Open Clip Editor
+              </button>
+            )}
+          </div>
+        ) : !pipelineError ? (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-600 font-medium uppercase tracking-wider mb-2">
+              Extracting 5 Viral Clips
+            </p>
+            {[0, 1, 2, 3, 4].map(i => (
+              <SkeletonCard key={i} index={i} />
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -207,7 +222,7 @@ function StepDot({ active }: { active: boolean }) {
   );
 }
 
-function SkeletonCard({ index, title }: { index: number; title: string }) {
+function SkeletonCard({ index }: { index: number }) {
   return (
     <div
       className="flex items-center gap-4 p-4 rounded-xl border border-white/[0.07] bg-slate-900/40 overflow-hidden"
@@ -240,24 +255,3 @@ function SkeletonCard({ index, title }: { index: number; title: string }) {
     </div>
   );
 }
-
-// Lucide doesn't export Waveform / Subtitles — inline them
-function Waveform(props: { size?: number; className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width={props.size ?? 24} height={props.size ?? 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
-      <path d="M2 12h2M6 8v8M10 4v16M14 9v6M18 6v12M22 12h-2" />
-    </svg>
-  );
-}
-
-function Subtitles(props: { size?: number; className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width={props.size ?? 24} height={props.size ?? 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={props.className}>
-      <rect width="20" height="14" x="2" y="5" rx="2" />
-      <path d="M8 15h-2M16 15h-4M20 15h-1" />
-    </svg>
-  );
-}
-
-// Keep exports to satisfy any future tree-shaking
-export { Waveform, Subtitles };

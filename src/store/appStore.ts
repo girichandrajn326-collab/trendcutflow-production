@@ -265,6 +265,52 @@ function buildClipsFromResult(result: JobResult): Clip[] {
   }));
 }
 
+async function fetchClipsFromDb(userId: string): Promise<Clip[]> {
+  // Fetch the user's latest video_source, then its repurposed_clips
+  const { data: sources } = await supabase
+    .from('video_sources')
+    .select('id')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!sources) return [];
+
+  const { data: rows } = await supabase
+    .from('repurposed_clips')
+    .select('*')
+    .eq('video_source_id', sources.id)
+    .order('created_at', { ascending: true });
+
+  if (!rows || rows.length === 0) return [];
+
+  return rows.map((r, i) => {
+    const meta = (r.metadata_json ?? {}) as Clip['metadata'];
+    return {
+      id: crypto.randomUUID(),
+      title: r.ai_title ?? `Clip ${i + 1}`,
+      duration: formatDuration(r.start_time, r.end_time),
+      thumbnail: r.clip_storage_url || THUMBNAIL_POOL[i % THUMBNAIL_POOL.length],
+      startTime: r.start_time,
+      endTime: r.end_time,
+      transcript: ((r.transcript_json?.words) ?? []).map((w: { id: number; word: string; start_ms: number; end_ms: number }) => ({
+        id: w.id,
+        word: w.word,
+        startMs: w.start_ms,
+        endMs: w.end_ms,
+      })),
+      metadata: {
+        viralTitles: meta.viralTitles ?? [r.ai_title ?? `Clip ${i + 1}`],
+        seoDescription: meta.seoDescription ?? r.ai_description ?? '',
+        hashtags: meta.hashtags ?? [],
+        algorithmicTags: meta.algorithmicTags ?? [],
+      },
+      noAudio: ((r.transcript_json?.words) ?? []).length === 0,
+    } satisfies Clip;
+  });
+}
+
 function setStepStatus(
   steps: PipelineStep[],
   id: PipelineStepId,
@@ -531,7 +577,7 @@ export function useAppState() {
             clipId: row.clip_id ?? '',
             platform: row.platform as QueuePlatform,
             intervalHours: row.interval_hours as QueueInterval,
-            scheduledAt: new Date(row.scheduled_at),
+            scheduledAt: new Date(row.scheduled_at ?? Date.now()),
           })).filter(e => e.clipId);
           if (entries.length > 0) setState(s => ({ ...s, publishQueue: entries }));
         });
@@ -862,50 +908,62 @@ export function useAppState() {
       // Mirror job status into the visual pipeline
       setState(s => ({
         ...s,
-        pipeline: mapJobStatusToPipeline(s.pipeline, job.status, job.step_detail, job.has_audio),
+        pipeline: mapJobStatusToPipeline(s.pipeline, job.status, job.step_detail ?? null, job.has_audio ?? null),
       }));
 
-      if (job.status === 'completed' && job.result) {
+      if (job.status === 'completed') {
         clearInterval(pollingIntervalRef.current!);
         pollingIntervalRef.current = null;
 
-        const newClips = buildClipsFromResult(job.result as JobResult);
-        setState(s => ({
-          ...s,
-          clips:           newClips,
-          activeClipIndex: 0,
-          activeWordIndex: 0,
-          screen:          'editor',
-          randomStyleSeed: generateRandomStyleSeed(),
-          pipeline:        mapJobStatusToPipeline(s.pipeline, 'completed', null, (job.result as JobResult).hasAudio),
-          user:            {
-            ...s.user,
-            videosProcessed: s.user.videosProcessed + 1,
-            credits:         Math.max(s.user.credits - 1, 0),
-          },
-        }));
+        const hasAudio = (job.result as JobResult | null)?.hasAudio ?? job.has_audio ?? true;
 
-        // Re-fetch the authoritative credit balance from DB so the UI stays accurate
-        supabase
-          .from('users')
-          .select('total_credits, credits_used, credits, current_plan')
-          .eq('id', userId)
-          .maybeSingle()
-          .then(({ data }) => {
-            if (!data) return;
-            const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
-            const planKey = (data.current_plan ?? '').toLowerCase();
-            setState(s => ({
-              ...s,
-              user: {
-                ...s.user,
-                plan:            planMap[planKey] ?? s.user.plan,
-                totalCredits:    data.total_credits ?? s.user.totalCredits,
-                videosProcessed: data.credits_used  ?? s.user.videosProcessed,
-                credits:         data.credits       ?? s.user.credits,
-              },
-            }));
-          });
+        // Build clips from job.result JSONB if present, otherwise fall back to DB rows
+        const buildAndApply = (clips: Clip[]) => {
+          if (clips.length === 0) return;
+          setState(s => ({
+            ...s,
+            clips,
+            activeClipIndex: 0,
+            activeWordIndex: 0,
+            screen: 'editor',
+            randomStyleSeed: generateRandomStyleSeed(),
+            pipeline: mapJobStatusToPipeline(s.pipeline, 'completed', null, hasAudio),
+            user: {
+              ...s.user,
+              videosProcessed: s.user.videosProcessed + 1,
+              credits: Math.max(s.user.credits - 1, 0),
+            },
+          }));
+
+          // Re-fetch the authoritative credit balance from DB so the UI stays accurate
+          supabase
+            .from('users')
+            .select('total_credits, credits_used, credits, current_plan')
+            .eq('id', userId)
+            .maybeSingle()
+            .then(({ data }) => {
+              if (!data) return;
+              const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
+              const planKey = (data.current_plan ?? '').toLowerCase();
+              setState(s => ({
+                ...s,
+                user: {
+                  ...s.user,
+                  plan: planMap[planKey] ?? s.user.plan,
+                  totalCredits: data.total_credits ?? s.user.totalCredits,
+                  videosProcessed: data.credits_used ?? s.user.videosProcessed,
+                  credits: data.credits ?? s.user.credits,
+                },
+              }));
+            });
+        };
+
+        if (job.result) {
+          buildAndApply(buildClipsFromResult(job.result as JobResult));
+        } else {
+          // Fallback: fetch clips from repurposed_clips via the latest video_source
+          fetchClipsFromDb(userId).then(buildAndApply);
+        }
       }
 
       if (job.status === 'failed') {

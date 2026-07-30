@@ -132,6 +132,7 @@ export default function App() {
             pipeline={state.pipeline}
             pipelineError={state.pipelineError}
             onGoBack={() => app.setScreen('intake')}
+            onViewClips={() => app.setScreen('editor')}
           />
         )}
         {state.screen === 'history' && (

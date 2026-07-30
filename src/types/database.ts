@@ -1,15 +1,17 @@
-// TypeScript types mirroring the Prisma schema exactly.
-// These are used for Supabase query typing until `prisma generate` produces
-// the Prisma Client types (which live in node_modules/.prisma/client).
+// TypeScript types mirroring the Supabase schema.
+// Used for Supabase query typing via createClient<Database>.
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 export type Plan = 'FREE' | 'CREATOR' | 'PRO';
 export type VideoStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type ProcessingJobStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type PublishQueueStatus = 'pending' | 'publishing' | 'published' | 'failed';
 
 // ─── Row shapes (match DB column names) ──────────────────────────────────────
 
 export interface DbUser {
+  [key: string]: unknown;
   id: string;
   email: string;
   name: string;
@@ -21,31 +23,72 @@ export interface DbUser {
 }
 
 export interface DbVideoSource {
+  [key: string]: unknown;
   id: string;
   user_id: string;
   title: string;
   source_url: string;
   status: VideoStatus;
-  duration: number; // seconds
+  duration: number;
+  created_at?: string;
 }
 
 export interface DbRepurposedClip {
+  [key: string]: unknown;
   id: string;
   video_source_id: string;
   start_time: number;
   end_time: number;
   clip_storage_url: string;
+  source_video_url?: string;
   transcript_json: TranscriptJson;
   ai_title: string;
   ai_description: string;
   is_queued: boolean;
+  metadata_json?: {
+    viralTitles?: string[];
+    seoDescription?: string;
+    hashtags?: string[];
+    algorithmicTags?: string[];
+  };
+  created_at?: string;
 }
 
 export interface DbIntegration {
+  [key: string]: unknown;
   id: string;
   user_id: string;
   platform: string;
   encrypted_refresh_token: string;
+  created_at?: string;
+}
+
+export interface DbProcessingJob {
+  [key: string]: unknown;
+  id: string;
+  user_id: string;
+  source_url?: string;
+  storage_path?: string;
+  status: ProcessingJobStatus;
+  step_detail?: string | null;
+  has_audio?: boolean | null;
+  result?: unknown;
+  error_message?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DbPublishQueue {
+  [key: string]: unknown;
+  id: string;
+  user_id: string;
+  clip_id: string;
+  clip_title?: string;
+  platform: string;
+  interval_hours?: number;
+  scheduled_at?: string;
+  status: PublishQueueStatus;
+  created_at?: string;
 }
 
 // ─── transcript_json shape stored in RepurposedClip ──────────────────────────
@@ -68,27 +111,43 @@ export interface Database {
     Tables: {
       users: {
         Row: DbUser;
-        Insert: Omit<DbUser, 'id' | 'created_at'> & { id?: string; created_at?: string };
-        Update: Partial<Omit<DbUser, 'id'>>;
+        Insert: Partial<DbUser>;
+        Update: Partial<DbUser>;
+        Relationships: [];
       };
       video_sources: {
         Row: DbVideoSource;
-        Insert: Omit<DbVideoSource, 'id'> & { id?: string };
-        Update: Partial<Omit<DbVideoSource, 'id'>>;
+        Insert: Partial<DbVideoSource>;
+        Update: Partial<DbVideoSource>;
+        Relationships: [];
       };
       repurposed_clips: {
         Row: DbRepurposedClip;
-        Insert: Omit<DbRepurposedClip, 'id'> & { id?: string };
-        Update: Partial<Omit<DbRepurposedClip, 'id'>>;
+        Insert: Partial<DbRepurposedClip>;
+        Update: Partial<DbRepurposedClip>;
+        Relationships: [];
       };
       integrations: {
         Row: DbIntegration;
-        Insert: Omit<DbIntegration, 'id'> & { id?: string };
-        Update: Partial<Omit<DbIntegration, 'id'>>;
+        Insert: Partial<DbIntegration>;
+        Update: Partial<DbIntegration>;
+        Relationships: [];
+      };
+      processing_jobs: {
+        Row: DbProcessingJob;
+        Insert: Partial<DbProcessingJob>;
+        Update: Partial<DbProcessingJob>;
+        Relationships: [];
+      };
+      publish_queue: {
+        Row: DbPublishQueue;
+        Insert: Partial<DbPublishQueue>;
+        Update: Partial<DbPublishQueue>;
+        Relationships: [];
       };
     };
-    Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Views: Record<string, { Row: Record<string, unknown>; Relationships: [] }>;
+    Functions: Record<string, { Args: Record<string, unknown>; Returns: unknown }>;
     Enums: {
       plan: Plan;
       video_status: VideoStatus;
@@ -97,8 +156,6 @@ export interface Database {
 }
 
 // ─── Mappers: DB row → UI model ───────────────────────────────────────────────
-// These translate snake_case DB columns to the camelCase UI types in appStore.ts
-// so the swap from mock → real data only requires changing the data source.
 
 import type { Clip, UserAccount, TranscriptWord as UITranscriptWord } from '../store/appStore';
 
