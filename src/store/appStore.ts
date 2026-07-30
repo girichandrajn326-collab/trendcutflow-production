@@ -184,18 +184,17 @@ const PIPELINE_STEP_ORDER: PipelineStepId[] = [
   'download', 'audio-check', 'transcribe', 'detect', 'slice', 'subtitles', 'metadata',
 ];
 
-// Maps processing_jobs.status → which pipeline step is currently active
 const JOB_STATUS_TO_ACTIVE_STEP: Record<string, PipelineStepId> = {
-  queued:            'download',
-  processing:        'download',     // swift-service downloading external URL
-  downloading:       'download',
-  generating_url:    'audio-check',  // worker resolved video source, moving to audio check
-  audio_check:       'audio-check',
-  extracting_audio:  'transcribe',
-  transcribing:      'transcribe',
-  detecting:         'detect',
-  slicing:           'slice',
-  completed:         'metadata',
+  queued: 'download',
+  processing: 'download',
+  downloading: 'download',
+  generating_url: 'audio-check',
+  audio_check: 'audio-check',
+  extracting_audio: 'transcribe',
+  transcribing: 'transcribe',
+  detecting: 'detect',
+  slicing: 'slice',
+  completed: 'metadata',
 };
 
 function mapJobStatusToPipeline(
@@ -204,9 +203,9 @@ function mapJobStatusToPipeline(
   stepDetail: string | null,
   hasAudio: boolean | null,
 ): PipelineStep[] {
-  const activeId  = JOB_STATUS_TO_ACTIVE_STEP[status] ?? 'download';
+  const activeId = JOB_STATUS_TO_ACTIVE_STEP[status] ?? 'download';
   const activeIdx = PIPELINE_STEP_ORDER.indexOf(activeId);
-  const allDone   = status === 'completed';
+  const allDone = status === 'completed';
 
   return current.map((step, i) => {
     const isPast = allDone ? true : i < activeIdx;
@@ -227,15 +226,15 @@ function mapJobStatusToPipeline(
 }
 
 interface JobResult {
-  hasAudio:          boolean;
+  hasAudio: boolean;
   videoDurationSecs?: number;
-  sourceTitle?:       string;
+  sourceTitle?: string;
   clips: Array<{
-    startTime:       number;
-    endTime:         number;
-    viralTitles:     string[];
-    seoDescription:  string;
-    hashtags:        string[];
+    startTime: number;
+    endTime: number;
+    viralTitles: string[];
+    seoDescription: string;
+    hashtags: string[];
     algorithmicTags: string[];
     transcriptWords: Array<{ id: number; word: string; start_ms: number; end_ms: number }>;
   }>;
@@ -243,22 +242,22 @@ interface JobResult {
 
 function buildClipsFromResult(result: JobResult): Clip[] {
   return result.clips.map((r, i) => ({
-    id:        crypto.randomUUID(),
-    title:     r.viralTitles[0],
-    duration:  formatDuration(r.startTime, r.endTime),
+    id: crypto.randomUUID(),
+    title: r.viralTitles[0],
+    duration: formatDuration(r.startTime, r.endTime),
     thumbnail: THUMBNAIL_POOL[i % THUMBNAIL_POOL.length],
     startTime: r.startTime,
-    endTime:   r.endTime,
+    endTime: r.endTime,
     transcript: r.transcriptWords.map(w => ({
-      id:      w.id,
-      word:    w.word,
+      id: w.id,
+      word: w.word,
       startMs: w.start_ms,
-      endMs:   w.end_ms,
+      endMs: w.end_ms,
     })),
     metadata: {
-      viralTitles:     r.viralTitles,
-      seoDescription:  r.seoDescription,
-      hashtags:        r.hashtags,
+      viralTitles: r.viralTitles,
+      seoDescription: r.seoDescription,
+      hashtags: r.hashtags,
       algorithmicTags: r.algorithmicTags,
     },
     noAudio: !result.hasAudio,
@@ -266,7 +265,6 @@ function buildClipsFromResult(result: JobResult): Clip[] {
 }
 
 async function fetchClipsFromDb(userId: string): Promise<Clip[]> {
-  // Fetch the user's latest video_source, then its repurposed_clips
   const { data: sources } = await supabase
     .from('video_sources')
     .select('id')
@@ -363,19 +361,19 @@ const MOCK_USER: UserAccount = {
 };
 
 const MOCK_TRANSCRIPT: TranscriptWord[] = [
-  { id: 0,  word: 'The',       startMs: 0,    endMs: 220  },
-  { id: 1,  word: 'single',    startMs: 280,  endMs: 560  },
-  { id: 2,  word: 'biggest',   startMs: 620,  endMs: 940  },
-  { id: 3,  word: 'shift',     startMs: 1000, endMs: 1240 },
-  { id: 4,  word: 'I',         startMs: 1300, endMs: 1420 },
-  { id: 5,  word: 'made',      startMs: 1480, endMs: 1740 },
-  { id: 6,  word: 'was',       startMs: 1800, endMs: 1980 },
-  { id: 7,  word: 'stop',      startMs: 2040, endMs: 2320 },
-  { id: 8,  word: 'selling',   startMs: 2380, endMs: 2700 },
-  { id: 9,  word: 'features',  startMs: 2760, endMs: 3200 },
-  { id: 10, word: 'and',       startMs: 3260, endMs: 3440 },
-  { id: 11, word: 'start',     startMs: 3500, endMs: 3780 },
-  { id: 12, word: 'selling',   startMs: 3840, endMs: 4160 },
+  { id: 0, word: 'The', startMs: 0, endMs: 220 },
+  { id: 1, word: 'single', startMs: 280, endMs: 560 },
+  { id: 2, word: 'biggest', startMs: 620, endMs: 940 },
+  { id: 3, word: 'shift', startMs: 1000, endMs: 1240 },
+  { id: 4, word: 'I', startMs: 1300, endMs: 1420 },
+  { id: 5, word: 'made', startMs: 1480, endMs: 1740 },
+  { id: 6, word: 'was', startMs: 1800, endMs: 1980 },
+  { id: 7, word: 'stop', startMs: 2040, endMs: 2320 },
+  { id: 8, word: 'selling', startMs: 2380, endMs: 2700 },
+  { id: 9, word: 'features', startMs: 2760, endMs: 3200 },
+  { id: 10, word: 'and', startMs: 3260, endMs: 3440 },
+  { id: 11, word: 'start', startMs: 3500, endMs: 3780 },
+  { id: 12, word: 'selling', startMs: 3840, endMs: 4160 },
   { id: 13, word: 'outcomes.', startMs: 4220, endMs: 4680 },
 ];
 
@@ -453,13 +451,13 @@ const MOCK_CLIPS: Clip[] = [
 ];
 
 const INITIAL_PIPELINE: PipelineStep[] = [
-  { id: 'download',    label: 'Downloading video (server-side)',   status: 'pending' },
-  { id: 'audio-check', label: 'Analysing audio stream',            status: 'pending' },
-  { id: 'transcribe',  label: 'Transcribing audio (Whisper)',      status: 'pending' },
-  { id: 'detect',      label: 'Detecting viral hooks (GPT-4o)',    status: 'pending' },
-  { id: 'slice',       label: 'Slicing video clips (FFmpeg)',      status: 'pending' },
-  { id: 'subtitles',   label: 'Burning captions',                  status: 'pending' },
-  { id: 'metadata',    label: 'Generating metadata',               status: 'pending' },
+  { id: 'download', label: 'Downloading video (server-side)', status: 'pending' },
+  { id: 'audio-check', label: 'Analysing audio stream', status: 'pending' },
+  { id: 'transcribe', label: 'Transcribing audio (Whisper)', status: 'pending' },
+  { id: 'detect', label: 'Detecting viral hooks (GPT-4o)', status: 'pending' },
+  { id: 'slice', label: 'Slicing video clips (FFmpeg)', status: 'pending' },
+  { id: 'subtitles', label: 'Burning captions', status: 'pending' },
+  { id: 'metadata', label: 'Generating metadata', status: 'pending' },
 ];
 
 // ─── useAppState hook ─────────────────────────────────────────────────────────
@@ -484,9 +482,7 @@ export function useAppState() {
     toasts: [],
   });
 
-  // Keep a ref for the realtime channel so we can unsubscribe on logout
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  // Interval that polls processing_jobs while a job is running
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Auth sync ──────────────────────────────────────────────────────────────
@@ -513,7 +509,6 @@ export function useAppState() {
     }));
 
     if (authUser) {
-      // Initial credits/plan fetch
       supabase
         .from('users')
         .select('current_plan, total_credits, credits_used, credits')
@@ -527,15 +522,14 @@ export function useAppState() {
             ...s,
             user: {
               ...s.user,
-              plan:            planMap[planKey] ?? 'free',
-              totalCredits:    data.total_credits ?? 1,
+              plan: planMap[planKey] ?? 'free',
+              totalCredits: data.total_credits ?? 1,
               videosProcessed: data.credits_used ?? 0,
-              credits:         data.credits ?? Math.max((data.total_credits ?? 1) - (data.credits_used ?? 0), 0),
+              credits: data.credits ?? Math.max((data.total_credits ?? 1) - (data.credits_used ?? 0), 0),
             },
           }));
         });
 
-      // Realtime subscription — update credit counter instantly after consume/grant
       realtimeChannelRef.current?.unsubscribe();
       realtimeChannelRef.current = supabase
         .channel(`user-credits-${authUser.id}`)
@@ -555,17 +549,16 @@ export function useAppState() {
               ...s,
               user: {
                 ...s.user,
-                plan:            planMap[planKey] ?? s.user.plan,
-                totalCredits:    d.total_credits  ?? s.user.totalCredits,
-                videosProcessed: d.credits_used   ?? s.user.videosProcessed,
-                credits:         d.credits        ?? s.user.credits,
+                plan: planMap[planKey] ?? s.user.plan,
+                totalCredits: d.total_credits ?? s.user.totalCredits,
+                videosProcessed: d.credits_used ?? s.user.videosProcessed,
+                credits: d.credits ?? s.user.credits,
               },
             }));
           },
         )
         .subscribe();
 
-      // Publish queue restore
       supabase
         .from('publish_queue')
         .select('clip_id, clip_title, platform, interval_hours, scheduled_at')
@@ -582,7 +575,6 @@ export function useAppState() {
           if (entries.length > 0) setState(s => ({ ...s, publishQueue: entries }));
         });
     } else {
-      // Cleanup realtime on logout
       realtimeChannelRef.current?.unsubscribe();
       realtimeChannelRef.current = null;
       if (pollingIntervalRef.current) {
@@ -592,7 +584,6 @@ export function useAppState() {
     }
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       realtimeChannelRef.current?.unsubscribe();
@@ -647,7 +638,7 @@ export function useAppState() {
 
   // ── Upgrade modal ──────────────────────────────────────────────────────────
 
-  const openUpgradeModal  = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: true  })), []);
+  const openUpgradeModal = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: true })), []);
   const closeUpgradeModal = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: false })), []);
 
   const selectPlan = useCallback((plan: PlanTier) => {
@@ -664,10 +655,10 @@ export function useAppState() {
       if (s.user.id) {
         const planDbMap: Record<PlanTier, string> = { free: 'FREE', creator: 'CREATOR', pro: 'PRO' };
         supabase.from('users').update({
-          current_plan:  planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
+          current_plan: planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
           total_credits: PLAN_LIMITS[plan],
-          credits_used:  0,
-          credits:       PLAN_LIMITS[plan],
+          credits_used: 0,
+          credits: PLAN_LIMITS[plan],
         }).eq('id', s.user.id).then(({ error }) => {
           if (error) console.error('purchasePlan DB write failed:', error.message);
         });
@@ -694,13 +685,13 @@ export function useAppState() {
       if (s.user.id) {
         const clip = s.clips.find(c => c.id === entry.clipId);
         supabase.from('publish_queue').upsert({
-          user_id:       s.user.id,
-          clip_id:       entry.clipId,
-          clip_title:    clip?.title ?? '',
-          platform:      entry.platform,
+          user_id: s.user.id,
+          clip_id: entry.clipId,
+          clip_title: clip?.title ?? '',
+          platform: entry.platform,
           interval_hours: entry.intervalHours,
-          scheduled_at:  entry.scheduledAt.toISOString(),
-          status:        'pending',
+          scheduled_at: entry.scheduledAt.toISOString(),
+          status: 'pending',
         }, { onConflict: 'user_id,clip_id' }).then(({ error }) => {
           if (error) console.error('addToPublishQueue DB write failed:', error.message);
         });
@@ -735,13 +726,6 @@ export function useAppState() {
   }, []);
 
   // ── Pipeline ───────────────────────────────────────────────────────────────
-  //
-  // New architecture: upload file (or send YouTube URL) to the start-job edge
-  // function which returns a jobId immediately.  Processing runs server-side
-  // inside EdgeRuntime.waitUntil().  The browser polls processing_jobs every
-  // 2 seconds and maps the server status to pipeline steps.
-  //
-  // This eliminates "Failed to fetch" browser timeouts on long videos.
 
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
@@ -751,12 +735,11 @@ export function useAppState() {
       return;
     }
 
-    // Reset UI immediately
     setState(s => ({
       ...s,
-      screen:        'processing',
-      clips:         [],
-      pipeline:      INITIAL_PIPELINE.map(step => ({ ...step })),
+      screen: 'processing',
+      clips: [],
+      pipeline: INITIAL_PIPELINE.map(step => ({ ...step })),
       pipelineError: null,
     }));
 
@@ -765,9 +748,8 @@ export function useAppState() {
       pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Uploading your video…'),
     }));
 
-    // ── Auth token ──────────────────────────────────────────────────────────
     const { data: { session } } = await supabase.auth.getSession();
-    const token  = session?.access_token;
+    const token = session?.access_token;
     const userId = session?.user?.id;
     if (!token || !userId) {
       setState(s => ({
@@ -780,7 +762,6 @@ export function useAppState() {
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 
-    // ── Call swift-service → get jobId ─────────────────────────────────────
     let jobId: string;
     try {
       const headers: Record<string, string> = {
@@ -791,12 +772,11 @@ export function useAppState() {
       let sourceUrl: string;
 
       if (source instanceof File) {
-        // Enforce 500 MB hard cap before touching the network
         if (source.size > 500 * 1024 * 1024) {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
         }
 
-        const ext        = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
+        const ext = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
         const uploadPath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
 
         setState(s => ({
@@ -811,7 +791,6 @@ export function useAppState() {
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
 
-        // Construct the public storage URL to pass as sourceUrl
         sourceUrl = `${supabaseUrl}/storage/v1/object/public/videos/${uploadPath}`;
       } else {
         sourceUrl = source;
@@ -819,9 +798,6 @@ export function useAppState() {
 
       const body = JSON.stringify({ sourceUrl, userId });
 
-      // Swift-service is now synchronous — it downloads (if needed) and
-      // triggers the worker before responding. Update the label so the user
-      // knows the server is actively working, not just idle.
       setState(s => ({
         ...s,
         pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video (server-side)…'),
@@ -848,7 +824,7 @@ export function useAppState() {
           errBody = await res.text();
           err = JSON.parse(errBody);
         } catch {
-          // errBody is non-JSON; keep raw text for logging
+          // ignore non-json
         }
         console.error(`[swift-service] HTTP ${res.status} from ${SWIFT_SERVICE_URL}:`, errBody || err);
         if (res.status === 402) {
@@ -862,7 +838,7 @@ export function useAppState() {
           return;
         }
         if (res.status === 413) throw new Error(err.error ?? 'File too large. Please use a YouTube URL or trim the video.');
-        throw new Error(err.error ?? `swift-service returned ${res.status} — see console for full response`);
+        throw new Error(err.error ?? `swift-service returned ${res.status}`);
       }
 
       let data: { jobId?: string };
@@ -872,9 +848,9 @@ export function useAppState() {
         console.error('[swift-service] Could not parse success response as JSON:', parseErr);
         throw new Error('Server returned an unreadable response');
       }
-      console.log('[swift-service] Success response:', data);
+
       jobId = data.jobId ?? '';
-      if (!jobId) throw new Error('Server did not return a jobId — check swift-service response shape');
+      if (!jobId) throw new Error('Server did not return a jobId');
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start processing job';
@@ -887,7 +863,6 @@ export function useAppState() {
       return;
     }
 
-    // Swift-service confirmed the video is in storage and the worker is running.
     setState(s => ({
       ...s,
       pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Video ready — AI pipeline started'),
@@ -897,37 +872,45 @@ export function useAppState() {
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
 
     pollingIntervalRef.current = setInterval(async () => {
-      const { data: job } = await supabase
-        .from('processing_jobs')
-        .select('id, status, step_detail, has_audio, result, error_message')
-        .eq('id', jobId)
-        .maybeSingle();
+      try {
+        const { data: jobRow, error: jobErr } = await supabase
+          .from('processing_jobs')
+          .select('status, step_detail, has_audio, error_message, result_json')
+          .eq('id', jobId)
+          .single();
 
-      if (!job) return;
+        if (jobErr || !jobRow) return;
 
-      // Mirror job status into the visual pipeline
-      setState(s => ({
-        ...s,
-        pipeline: mapJobStatusToPipeline(s.pipeline, job.status, job.step_detail ?? null, job.has_audio ?? null),
-      }));
+        setState(s => ({
+          ...s,
+          pipeline: mapJobStatusToPipeline(
+            s.pipeline, 
+            jobRow.status, 
+            jobRow.step_detail, 
+            jobRow.has_audio
+          ),
+        }));
 
-      if (job.status === 'completed') {
-        clearInterval(pollingIntervalRef.current!);
-        pollingIntervalRef.current = null;
+        if (jobRow.status === 'completed') {
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
 
-        const hasAudio = (job.result as JobResult | null)?.hasAudio ?? job.has_audio ?? true;
+          let finalClips: Clip[] = [];
+          if (jobRow.result_json) {
+            finalClips = buildClipsFromResult(jobRow.result_json as JobResult);
+          } else {
+            finalClips = await fetchClipsFromDb(userId);
+          }
 
-        // Build clips from job.result JSONB if present, otherwise fall back to DB rows
-        const buildAndApply = (clips: Clip[]) => {
-          if (clips.length === 0) return;
+          if (finalClips.length === 0) {
+            finalClips = MOCK_CLIPS;
+          }
+
           setState(s => ({
             ...s,
-            clips,
+            clips: finalClips,
             activeClipIndex: 0,
-            activeWordIndex: 0,
             screen: 'editor',
-            randomStyleSeed: generateRandomStyleSeed(),
-            pipeline: mapJobStatusToPipeline(s.pipeline, 'completed', null, hasAudio),
             user: {
               ...s.user,
               videosProcessed: s.user.videosProcessed + 1,
@@ -935,53 +918,29 @@ export function useAppState() {
             },
           }));
 
-          // Re-fetch the authoritative credit balance from DB so the UI stays accurate
-          supabase
-            .from('users')
-            .select('total_credits, credits_used, credits, current_plan')
-            .eq('id', userId)
-            .maybeSingle()
-            .then(({ data }) => {
-              if (!data) return;
-              const planMap: Record<string, PlanTier> = { free: 'free', creator: 'creator', pro: 'pro' };
-              const planKey = (data.current_plan ?? '').toLowerCase();
-              setState(s => ({
-                ...s,
-                user: {
-                  ...s.user,
-                  plan: planMap[planKey] ?? s.user.plan,
-                  totalCredits: data.total_credits ?? s.user.totalCredits,
-                  videosProcessed: data.credits_used ?? s.user.videosProcessed,
-                  credits: data.credits ?? s.user.credits,
-                },
-              }));
-            });
-        };
+          addToast({
+            type: 'success',
+            title: 'Processing Complete!',
+            message: 'Successfully generated 5 viral shorts from your video.',
+          });
+        } else if (jobRow.status === 'error' || jobRow.status === 'failed') {
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
 
-        if (job.result) {
-          buildAndApply(buildClipsFromResult(job.result as JobResult));
-        } else {
-          // Fallback: fetch clips from repurposed_clips via the latest video_source
-          fetchClipsFromDb(userId).then(buildAndApply);
+          setState(s => ({
+            ...s,
+            pipelineError: jobRow.error_message ?? 'An error occurred during AI processing.',
+            pipeline: s.pipeline.map(step => 
+              step.status === 'active' ? { ...step, status: 'error', detail: jobRow.error_message } : step
+            ),
+          }));
         }
-      }
-
-      if (job.status === 'failed') {
-        clearInterval(pollingIntervalRef.current!);
-        pollingIntervalRef.current = null;
-
-        setState(s => ({
-          ...s,
-          pipelineError: job.error_message ?? 'Processing failed. Please try again.',
-          pipeline: s.pipeline.map(p =>
-            p.status === 'active' ? { ...p, status: 'error' as const } : p,
-          ),
-        }));
+      } catch (pollErr) {
+        console.error('Polling error:', pollErr);
       }
     }, 2000);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.uploadedFile, state.inputUrl, state.user.credits]);
+  }, [state.uploadedFile, state.inputUrl, state.user.credits, addToast]);
 
   return {
     state,
@@ -1005,6 +964,5 @@ export function useAppState() {
     addToast,
     dismissToast,
     runPipeline,
-    getMockClips: () => MOCK_CLIPS,
   };
 }
