@@ -875,7 +875,7 @@ export function useAppState() {
       try {
         const { data: jobRow, error: jobErr } = await supabase
           .from('processing_jobs')
-          .select('status, step_detail, has_audio, error_message, result_json')
+          .select('status, step_detail, has_audio, error_message, result')
           .eq('id', jobId)
           .single();
 
@@ -886,8 +886,8 @@ export function useAppState() {
           pipeline: mapJobStatusToPipeline(
             s.pipeline, 
             jobRow.status, 
-            jobRow.step_detail, 
-            jobRow.has_audio
+            jobRow.step_detail ?? null, 
+            jobRow.has_audio ?? null
           ),
         }));
 
@@ -896,8 +896,8 @@ export function useAppState() {
           pollingIntervalRef.current = null;
 
           let finalClips: Clip[] = [];
-          if (jobRow.result_json) {
-            finalClips = buildClipsFromResult(jobRow.result_json as JobResult);
+          if (jobRow.result) {
+            finalClips = buildClipsFromResult(jobRow.result as JobResult);
           } else {
             finalClips = await fetchClipsFromDb(userId);
           }
@@ -923,15 +923,15 @@ export function useAppState() {
             title: 'Processing Complete!',
             message: 'Successfully generated 5 viral shorts from your video.',
           });
-        } else if (jobRow.status === 'error' || jobRow.status === 'failed') {
+        } else if (jobRow.status === 'failed') {
           if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           pollingIntervalRef.current = null;
 
           setState(s => ({
             ...s,
             pipelineError: jobRow.error_message ?? 'An error occurred during AI processing.',
-            pipeline: s.pipeline.map(step => 
-              step.status === 'active' ? { ...step, status: 'error', detail: jobRow.error_message } : step
+            pipeline: s.pipeline.map(step =>
+              step.status === 'active' ? { ...step, status: 'error' as const, detail: jobRow.error_message ?? undefined } : step
             ),
           }));
         }
