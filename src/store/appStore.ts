@@ -328,7 +328,7 @@ function buildUserFromAuth(authUser: AuthUser): UserAccount {
     .map(n => n[0] ?? '')
     .join('')
     .toUpperCase()
-    .slice(0, 2) || authUser.email[0].toUpperCase();
+    .slice(0, 2) || (authUser.email?.[0]?.toUpperCase() ?? '?');
   return {
     id: authUser.id,
     email: authUser.email,
@@ -625,7 +625,7 @@ export function useAppState() {
       ...s,
       clips: s.clips.map(c =>
         c.id === clipId
-          ? { ...c, metadata: { ...c.metadata, viralTitles: c.metadata.viralTitles.map((t, i) => i === titleIndex ? value : t) } }
+          ? { ...c, metadata: { ...c.metadata, viralTitles: (c.metadata?.viralTitles ?? []).map((t, i) => i === titleIndex ? value : t) } }
           : c,
       ),
     }));

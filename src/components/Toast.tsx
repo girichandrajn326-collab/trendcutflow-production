@@ -35,7 +35,7 @@ const DURATION = 4200; // ms — must match appStore auto-dismiss timeout
 
 export function Toast({ toast, onDismiss }: ToastProps) {
   const { id, type, title, message } = toast;
-  const c = CONFIG[type];
+  const c = CONFIG[type] ?? CONFIG.info;
   const barRef = useRef<HTMLDivElement>(null);
 
   // Animate the progress bar shrinking over DURATION ms

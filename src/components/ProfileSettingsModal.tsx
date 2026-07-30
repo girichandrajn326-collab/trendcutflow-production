@@ -10,7 +10,7 @@ interface ProfileSettingsModalProps {
 }
 
 export default function ProfileSettingsModal({ user, onClose, onSaved }: ProfileSettingsModalProps) {
-  const [name, setName]         = useState(user.name);
+  const [name, setName]         = useState(user?.name ?? '');
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState<string | null>(null);
   const inputRef                = useRef<HTMLInputElement>(null);
@@ -68,7 +68,7 @@ export default function ProfileSettingsModal({ user, onClose, onSaved }: Profile
             <label className="block text-xs font-medium text-slate-400 pl-1">Email Address</label>
             <div className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-slate-800/40 border border-white/[0.06] opacity-60">
               <Mail size={14} className="text-slate-500 flex-shrink-0" />
-              <span className="text-slate-400 text-sm">{user.email}</span>
+              <span className="text-slate-400 text-sm">{user?.email ?? ''}</span>
             </div>
             <p className="text-slate-600 text-[11px] pl-1">Email cannot be changed here.</p>
           </div>
@@ -100,7 +100,7 @@ export default function ProfileSettingsModal({ user, onClose, onSaved }: Profile
             </button>
             <button
               type="submit"
-              disabled={saving || name.trim() === user.name}
+              disabled={saving || name.trim() === (user?.name ?? '')}
               className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-cyan-500 text-white text-sm font-semibold flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-sky-900/20"
             >
               {saving ? <><Loader2 size={14} className="animate-spin" />Saving…</> : <><Save size={14} />Save Changes</>}

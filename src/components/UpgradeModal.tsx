@@ -186,7 +186,8 @@ export default function UpgradeModal({
       // Script failed to load — fall through to simulated flow
     }
 
-    const plan = PLAN_DEFS.find(p => p.id === planId)!;
+    const plan = PLAN_DEFS.find(p => p.id === planId);
+    if (!plan) return;
     const amount = PLAN_PAISE[planId] ?? 0;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

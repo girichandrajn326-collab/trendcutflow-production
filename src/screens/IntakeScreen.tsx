@@ -30,9 +30,9 @@ export default function IntakeScreen({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { inputUrl, isDragging, uploadedFile, user } = state;
 
-  const creditsUsed  = user.videosProcessed;
-  const totalCredits = user.totalCredits;
-  const noCredits    = user.credits <= 0;
+  const creditsUsed  = user?.videosProcessed ?? 0;
+  const totalCredits = user?.totalCredits ?? 0;
+  const noCredits    = (user?.credits ?? 0) <= 0;
 
   const urlSource    = inputUrl ? detectUrlSource(inputUrl) : null;
   // Both YouTube and Instagram are valid inputs (server-side download will handle them)

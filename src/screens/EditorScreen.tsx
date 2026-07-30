@@ -86,7 +86,7 @@ export default function EditorScreen({
     if (!clip?.transcript?.length) return;
     if (isPlaying) {
       playRef.current = setInterval(() => {
-        onSetActiveWord((state.activeWordIndex + 1) % clip.transcript.length);
+        onSetActiveWord((state.activeWordIndex + 1) % (clip?.transcript?.length ?? 1));
       }, 340);
     } else {
       if (playRef.current) clearInterval(playRef.current);
@@ -137,6 +137,7 @@ export default function EditorScreen({
   }, []);
 
   const handlePublishNow = useCallback(async () => {
+    if (!clip) return;
     if (!ytConnected) { handleConnectYouTube(); return; }
     setPublishing(true);
     try {
@@ -144,9 +145,9 @@ export default function EditorScreen({
       if (!session) throw new Error('Not authenticated');
       await executePublish({
         id: crypto.randomUUID(),
-        clipId: clip.id,
+        clipId: clip?.id ?? '',
         userId: session.user.id,
-        title: clip.title,
+        title: clip?.title ?? '',
         scheduledAt: new Date(),
         status: 'processing',
         platform: 'youtube_shorts',
@@ -216,6 +217,7 @@ export default function EditorScreen({
   }, []);
 
   const handleExport = useCallback(async () => {
+    if (!clip) return;
     const uploadedFile = state.uploadedFile;
     if (!uploadedFile) {
       alert('Export requires the original video file. Please go back and re-upload it.');
@@ -223,13 +225,13 @@ export default function EditorScreen({
     }
     setExporting(true);
     try {
-      const safeName = `${clip.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.webm`;
+      const safeName = `${(clip?.title ?? 'clip').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.webm`;
 
       // Canvas renderer: trims to 9:16, burns subtitles, works without FFmpeg/COEP headers
       const blob = await renderClipWithSubtitles(uploadedFile, {
-        startTime: clip.startTime,
-        endTime: clip.endTime,
-        words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+        startTime: clip?.startTime ?? 0,
+        endTime: clip?.endTime ?? 0,
+        words: (clip?.transcript ?? []).map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
         style: state.subtitlePreset,
         styleSeed: state.randomStyleSeed,
       });
@@ -245,15 +247,15 @@ export default function EditorScreen({
       }
 
       // Canvas render failed — try FFmpeg path (requires COEP headers)
-      let blobUrl = clipBlobUrls[clip.id];
+      let blobUrl = clipBlobUrls[clip?.id ?? ''];
       if (!blobUrl) {
-        blobUrl = await trimVideoClip(uploadedFile, clip.startTime, clip.endTime);
-        setClipBlobUrls(prev => ({ ...prev, [clip.id]: blobUrl }));
+        blobUrl = await trimVideoClip(uploadedFile, clip?.startTime ?? 0, clip?.endTime ?? 0);
+        setClipBlobUrls(prev => ({ ...prev, [clip?.id ?? '']: blobUrl }));
       }
       const rawRes = await fetch(blobUrl);
       const rawBlob = await rawRes.blob();
       const burned = await burnSubtitles(rawBlob, {
-        words: clip.transcript.map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+        words: (clip?.transcript ?? []).map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
         style: state.subtitlePreset,
         styleSeed: state.randomStyleSeed,
       });
@@ -612,7 +614,7 @@ export default function EditorScreen({
                   <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">3 Viral Titles</span>
                 </div>
                 <div className="space-y-2">
-                  {clip.metadata.viralTitles.map((title, i) => (
+                  {(clip.metadata?.viralTitles ?? []).map((title, i) => (
                     <TitleEditor
                       key={i}
                       title={title}
@@ -636,7 +638,7 @@ export default function EditorScreen({
                     <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">SEO Description</span>
                   </div>
                   <button
-                    onClick={() => copyToClipboard(clip.metadata.seoDescription, 'seo')}
+                    onClick={() => copyToClipboard(clip.metadata?.seoDescription ?? '', 'seo')}
                     className="text-slate-500 hover:text-white transition-colors"
                   >
                     {copied === 'seo'
@@ -646,10 +648,10 @@ export default function EditorScreen({
                   </button>
                 </div>
                 <p className="text-slate-300 text-xs leading-relaxed bg-white/[0.03] border border-white/[0.06] rounded-xl p-3">
-                  {clip.metadata.seoDescription}
+                  {clip.metadata?.seoDescription ?? ''}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  {clip.metadata.hashtags.map((tag) => (
+                  {(clip.metadata?.hashtags ?? []).map((tag) => (
                     <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-300 font-medium">
                       {tag}
                     </span>
@@ -664,7 +666,7 @@ export default function EditorScreen({
                   <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Algorithmic Tags</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {clip.metadata.algorithmicTags.map((tag) => (
+                  {(clip.metadata?.algorithmicTags ?? []).map((tag) => (
                     <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 font-medium">
                       {tag}
                     </span>

@@ -27,7 +27,7 @@ export default function Header({
 }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { user, isAccountDropdownOpen } = state;
-  const creditPct = (user.videosProcessed / Math.max(user.totalCredits, 1)) * 100;
+  const creditPct = ((user?.videosProcessed ?? 0) / Math.max(user?.totalCredits ?? 1, 1)) * 100;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -43,13 +43,13 @@ export default function Header({
     free:    'text-slate-400 border-slate-600/60',
     creator: 'text-sky-400 border-sky-500/40',
     pro:     'text-amber-400 border-amber-500/40',
-  }[user.plan];
+  }[user?.plan ?? 'free'];
 
   const planName = {
     free:    'Free',
     creator: 'Creator Flow',
     pro:     'Pro Flow',
-  }[user.plan];
+  }[user?.plan ?? 'free'] ?? 'Free';
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 glass-dark border-b border-white/[0.06]">
@@ -84,7 +84,7 @@ export default function Header({
 
           {/* Real-time credit counter pill */}
           {(() => {
-            const remaining = user.credits ?? Math.max(user.totalCredits - user.videosProcessed, 0);
+            const remaining = user?.credits ?? Math.max((user?.totalCredits ?? 0) - (user?.videosProcessed ?? 0), 0);
             const isLow     = remaining <= 1;
             const isEmpty   = remaining === 0;
             return (
@@ -100,13 +100,13 @@ export default function Header({
                 }`}
               >
                 <Zap size={11} className={isEmpty ? 'text-red-400' : isLow ? 'text-amber-400' : 'text-slate-500'} />
-                <span>{remaining}<span className="text-current/50">/{user.totalCredits}</span></span>
+                <span>{remaining}<span className="text-current/50">/{user?.totalCredits ?? 0}</span></span>
               </button>
             );
           })()}
 
           {/* Upgrade button */}
-          {user.plan !== 'pro' && (
+          {user?.plan !== 'pro' && (
             <button
               onClick={onOpenUpgradeModal}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-sky-600/20 to-cyan-500/20 border border-sky-500/30 hover:border-sky-500/60 text-sky-300 hover:text-sky-200 text-xs font-semibold transition-all duration-200 hover:shadow-[0_0_12px_rgba(14,165,233,0.3)]"
@@ -124,10 +124,10 @@ export default function Header({
             >
               {/* Avatar */}
               <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500/80 to-cyan-500/80 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                {user.avatarInitials}
+                {user?.avatarInitials ?? '?'}
               </div>
               <div className="hidden sm:flex flex-col items-start leading-none">
-                <span className="text-white text-xs font-medium">{user.name}</span>
+                <span className="text-white text-xs font-medium">{user?.name ?? 'User'}</span>
                 <span className={`text-[10px] font-medium border rounded px-1 mt-0.5 ${planBadgeColor}`}>
                   {planName}
                 </span>
@@ -145,11 +145,11 @@ export default function Header({
                 <div className="px-4 pt-4 pb-3 border-b border-white/[0.06]">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-400 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                      {user.avatarInitials}
+                      {user?.avatarInitials ?? '?'}
                     </div>
                     <div>
-                      <div className="text-white text-sm font-semibold">{user.name}</div>
-                      <div className="text-slate-400 text-xs">{user.email}</div>
+                      <div className="text-white text-sm font-semibold">{user?.name ?? 'User'}</div>
+                      <div className="text-slate-400 text-xs">{user?.email ?? ''}</div>
                     </div>
                   </div>
 
@@ -158,7 +158,7 @@ export default function Header({
                     <div className="flex justify-between items-center mb-1.5">
                       <span className="text-xs text-slate-400 font-medium">Processing Credits</span>
                       <span className={`text-xs font-bold ${creditPct >= 100 ? 'text-red-400' : 'text-white'}`}>
-                        {user.videosProcessed} / {user.totalCredits} used
+                        {user?.videosProcessed ?? 0} / {user?.totalCredits ?? 0} used
                       </span>
                     </div>
                     <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
@@ -188,7 +188,7 @@ export default function Header({
                 </div>
 
                 {/* Upgrade CTA if not pro */}
-                {user.plan !== 'pro' && (
+                {user?.plan !== 'pro' && (
                   <div className="px-3 pb-3">
                     <button
                       onClick={onOpenUpgradeModal}
