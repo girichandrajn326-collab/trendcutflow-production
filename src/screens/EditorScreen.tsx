@@ -182,7 +182,7 @@ export default function EditorScreen({
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.id, state.uploadedFile]);
+  }, [clip?.id, state.uploadedFile]);
 
   // Revoke all blob URLs when the component unmounts to free memory.
   useEffect(() => {
@@ -329,9 +329,9 @@ export default function EditorScreen({
       <div className="border-b border-white/[0.06] bg-slate-950/80 backdrop-blur-sm">
         <div className="max-w-screen-xl mx-auto px-6 py-3 flex items-center gap-3 overflow-x-auto no-scrollbar">
           <span className="text-xs text-slate-500 font-medium flex-shrink-0 uppercase tracking-wider">Clips:</span>
-          {clips.map((c, i) => (
+          {(clips ?? []).map((c, i) => (
             <button
-              key={c.id}
+              key={c?.id ?? i}
               onClick={() => onSetClip(i)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium flex-shrink-0 transition-all duration-200 ${
                 i === activeClipIndex
@@ -342,8 +342,8 @@ export default function EditorScreen({
               <span className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
                 i === activeClipIndex ? 'bg-sky-500 text-white' : 'bg-white/[0.08] text-slate-500'
               }`}>{i + 1}</span>
-              <span className="max-w-[140px] truncate">{c.title}</span>
-              <span className="text-slate-600 ml-1">{c.duration}</span>
+              <span className="max-w-[140px] truncate">{c?.title ?? 'Untitled'}</span>
+              <span className="text-slate-600 ml-1">{c?.duration ?? ''}</span>
             </button>
           ))}
         </div>
@@ -369,7 +369,7 @@ export default function EditorScreen({
                 {/* Background: trimmed blob > source URL at timestamp > Pexels thumbnail */}
                 {clipBlobUrls[clip.id] ? (
                   <video
-                    src={clipBlobUrls[clip.id]}
+                    src={clipBlobUrls[clip.id] ?? ''}
                     className="absolute inset-0 w-full h-full object-cover"
                     autoPlay={isPlaying}
                     loop
@@ -385,8 +385,8 @@ export default function EditorScreen({
                   />
                 ) : (
                   <img
-                    src={clip.thumbnail}
-                    alt={clip.title}
+                    src={clip.thumbnail ?? ''}
+                    alt={clip.title ?? ''}
                     className="absolute inset-0 w-full h-full object-cover"
                   />
                 )}
