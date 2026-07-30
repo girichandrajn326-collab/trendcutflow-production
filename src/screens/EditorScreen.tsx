@@ -83,6 +83,7 @@ export default function EditorScreen({
 
   // ── Playback interval ──────────────────────────────────────────────────────
   useEffect(() => {
+    if (!clip?.transcript?.length) return;
     if (isPlaying) {
       playRef.current = setInterval(() => {
         onSetActiveWord((state.activeWordIndex + 1) % clip.transcript.length);
@@ -91,7 +92,7 @@ export default function EditorScreen({
       if (playRef.current) clearInterval(playRef.current);
     }
     return () => { if (playRef.current) clearInterval(playRef.current); };
-  }, [isPlaying, state.activeWordIndex, clip.transcript.length, onSetActiveWord]);
+  }, [isPlaying, state.activeWordIndex, clip?.transcript?.length, onSetActiveWord]);
 
   // Reset on clip switch
   useEffect(() => {
@@ -163,6 +164,7 @@ export default function EditorScreen({
   // Trim current clip client-side when an uploaded file is available.
   // Runs once per clip id; skips if we already have a blob URL for it.
   useEffect(() => {
+    if (!clip) return;
     const uploadedFile = state.uploadedFile;
     if (!uploadedFile) return;
     if (clipBlobUrls[clip.id]) return;
@@ -289,22 +291,34 @@ export default function EditorScreen({
 
   // ── Word inline edit handlers ───────────────────────────────────────────────
   const commitWordEdit = useCallback((idx: number, val: string) => {
-    if (val.trim() === clip.transcript[idx]?.word) {
+    if (val.trim() === clip?.transcript?.[idx]?.word) {
       setWordEdits(prev => { const n = { ...prev }; delete n[idx]; return n; });
     } else {
       setWordEdits(prev => ({ ...prev, [idx]: val.trim() }));
     }
     setEditingWordIdx(null);
-  }, [clip.transcript]);
+  }, [clip?.transcript]);
 
   const styleSeedCss = getStyleSeedVariation(randomStyleSeed);
 
   // Build display words (with any inline edits applied)
-  const displayTranscript: TranscriptWord[] = clip.transcript.map((w, i) =>
+  const displayTranscript: TranscriptWord[] = (clip?.transcript ?? []).map((w, i) =>
     wordEdits[i] ? { ...w, word: wordEdits[i] } : w,
   );
 
   const progressPct = (activeWordIndex / Math.max(displayTranscript.length - 1, 1)) * 100;
+
+  // Loading state: clips not yet loaded from DB
+  if (!clip || !clip.transcript) {
+    return (
+      <div className="min-h-screen pt-16 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-slate-500 text-sm font-medium">Loading clip editor…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pt-16 flex flex-col">
