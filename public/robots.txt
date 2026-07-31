@@ -10,4 +10,4 @@ Disallow: /editor
 Disallow: /history
 
 # Sitemap
-Sitemap: https://trendcutflow.com/sitemap.xml
+Sitemap: https://app.trendcutflow.com/sitemap.xml

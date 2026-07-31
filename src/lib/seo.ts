@@ -4,7 +4,7 @@ const SITE_NAME = 'TrendCutFlow';
 const DEFAULT_TITLE = 'TrendCutFlow — Turn Long Videos into Viral 9:16 Shorts with AI';
 const DEFAULT_DESCRIPTION =
   'Upload any long-form video and let AI extract the most engaging moments as ready-to-publish vertical shorts. No editing skills needed.';
-const SITE_URL = 'https://trendcutflow.com';
+const SITE_URL = 'https://app.trendcutflow.com';
 const OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 export interface HeadMeta {
