@@ -360,95 +360,7 @@ const MOCK_USER: UserAccount = {
   avatarInitials: 'GU',
 };
 
-const MOCK_TRANSCRIPT: TranscriptWord[] = [
-  { id: 0, word: 'The', startMs: 0, endMs: 220 },
-  { id: 1, word: 'single', startMs: 280, endMs: 560 },
-  { id: 2, word: 'biggest', startMs: 620, endMs: 940 },
-  { id: 3, word: 'shift', startMs: 1000, endMs: 1240 },
-  { id: 4, word: 'I', startMs: 1300, endMs: 1420 },
-  { id: 5, word: 'made', startMs: 1480, endMs: 1740 },
-  { id: 6, word: 'was', startMs: 1800, endMs: 1980 },
-  { id: 7, word: 'stop', startMs: 2040, endMs: 2320 },
-  { id: 8, word: 'selling', startMs: 2380, endMs: 2700 },
-  { id: 9, word: 'features', startMs: 2760, endMs: 3200 },
-  { id: 10, word: 'and', startMs: 3260, endMs: 3440 },
-  { id: 11, word: 'start', startMs: 3500, endMs: 3780 },
-  { id: 12, word: 'selling', startMs: 3840, endMs: 4160 },
-  { id: 13, word: 'outcomes.', startMs: 4220, endMs: 4680 },
-];
 
-const MOCK_CLIPS: Clip[] = [
-  {
-    id: 'clip-1',
-    title: 'I Changed ONE Thing & Made 5x More Revenue in 60 Days',
-    duration: '0:58',
-    thumbnail: THUMBNAIL_POOL[0],
-    startTime: 0, endTime: 58,
-    transcript: MOCK_TRANSCRIPT,
-    metadata: {
-      viralTitles: ['I Changed ONE Thing & Made 5x More Revenue in 60 Days', 'Stop Selling Features (Do This Instead)', 'The Mindset That Took Me From 2% to 11% Conversion Rate'],
-      seoDescription: 'Discover the single mindset shift that transformed my business revenue.',
-      hashtags: ['#BusinessGrowth', '#SalesTips', '#Entrepreneur', '#RevenueGrowth', '#MindsetShift', '#ConversionRate'],
-      algorithmicTags: ['mindset shift business', 'increase conversion rate', 'sales strategy 2024', 'entrepreneur tips', 'business revenue growth'],
-    },
-  },
-  {
-    id: 'clip-2',
-    title: 'Most Creators Quit RIGHT Before Going Viral',
-    duration: '1:02',
-    thumbnail: THUMBNAIL_POOL[1],
-    startTime: 62, endTime: 124,
-    transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
-    metadata: {
-      viralTitles: ["Most Creators Quit RIGHT Before Going Viral (Here's Proof)", "The Algorithm Rewards This One Thing (It's Not Talent)", 'I Studied 200 Viral Accounts — They All Did This'],
-      seoDescription: 'After studying 200+ creator accounts that went viral, I found a shocking pattern.',
-      hashtags: ['#ContentCreator', '#YouTubeTips', '#ViralContent', '#CreatorEconomy', '#SocialMediaGrowth', '#ConsistencyIsKey'],
-      algorithmicTags: ['creator tips going viral', 'youtube algorithm 2024', 'content creator strategy', 'grow on social media', 'consistency content creation'],
-    },
-  },
-  {
-    id: 'clip-3',
-    title: 'The 5-Line Cold Email That Gets 40% Reply Rates',
-    duration: '0:54',
-    thumbnail: THUMBNAIL_POOL[2],
-    startTime: 130, endTime: 184,
-    transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
-    metadata: {
-      viralTitles: ['The 5-Line Cold Email That Gets 40% Reply Rates', "I Sent 10,000 Cold Emails — Here's What Actually Works", 'Copy This Cold Email Formula (40% Response Rate)'],
-      seoDescription: "After 10,000+ cold emails sent, I've refined a 5-line formula that consistently achieves 40% reply rates.",
-      hashtags: ['#ColdEmail', '#EmailMarketing', '#LeadGeneration', '#SalesTips', '#OutreachStrategy', '#B2BSales'],
-      algorithmicTags: ['cold email tips', 'email outreach strategy', 'b2b sales tactics', 'lead generation emails', 'sales email template'],
-    },
-  },
-  {
-    id: 'clip-4',
-    title: 'I Shared My Real Revenue Numbers — My Following Tripled',
-    duration: '1:05',
-    thumbnail: THUMBNAIL_POOL[3],
-    startTime: 190, endTime: 255,
-    transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
-    metadata: {
-      viralTitles: ['I Shared My Real Revenue Numbers — My Following Tripled', 'Build in Public: The Growth Strategy Nobody Talks About', 'Why Showing Your Failures Online Is the Best Marketing'],
-      seoDescription: 'By sharing real revenue, real failures, and real spreadsheets, I tripled my following in 4 months.',
-      hashtags: ['#BuildInPublic', '#CreatorEconomy', '#Transparency', '#PersonalBrand', '#StartupLife', '#ContentStrategy'],
-      algorithmicTags: ['build in public strategy', 'personal brand growth', 'creator transparency', 'grow following fast', 'authentic content marketing'],
-    },
-  },
-  {
-    id: 'clip-5',
-    title: 'A Client Said I Was Too Cheap to Be Credible — So I Raised Prices',
-    duration: '0:51',
-    thumbnail: THUMBNAIL_POOL[4],
-    startTime: 260, endTime: 311,
-    transcript: MOCK_TRANSCRIPT.map(w => ({ ...w })),
-    metadata: {
-      viralTitles: ["A Client Said I Was 'Too Cheap to Be Credible' — So I Raised Prices", "Raising My Prices 40% Got Me MORE Clients (Here's Why)", 'The 2AM Lesson That Changed My Entire Pricing Strategy'],
-      seoDescription: "When a prospect said I was 'too cheap to be credible,' I raised my prices 40% and booked 3 new clients in 2 weeks.",
-      hashtags: ['#PricingStrategy', '#Freelance', '#BusinessTips', '#Consulting', '#ValueBasedPricing', '#Entrepreneurship'],
-      algorithmicTags: ['pricing strategy business', 'raise your prices', 'value based pricing', 'freelancer tips', 'consulting pricing'],
-    },
-  },
-];
 
 const INITIAL_PIPELINE: PipelineStep[] = [
   { id: 'download', label: 'Downloading video (server-side)', status: 'pending' },
@@ -903,7 +815,17 @@ export function useAppState() {
           }
 
           if (finalClips.length === 0) {
-            finalClips = MOCK_CLIPS;
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+
+            setState(s => ({
+              ...s,
+              pipelineError: 'Processing completed but no clips were generated. The video may have no speech, or the AI services returned empty results. Check processing logs for details.',
+              pipeline: s.pipeline.map(step =>
+                step.status === 'active' ? { ...step, status: 'error' as const, detail: 'No clips generated' } : step
+              ),
+            }));
+            return;
           }
 
           setState(s => ({
@@ -921,7 +843,7 @@ export function useAppState() {
           addToast({
             type: 'success',
             title: 'Processing Complete!',
-            message: 'Successfully generated 5 viral shorts from your video.',
+            message: `Successfully generated ${finalClips.length} viral shorts from your video.`,
           });
         } else if (jobRow.status === 'failed') {
           if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
