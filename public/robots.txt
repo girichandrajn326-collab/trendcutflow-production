@@ -1,0 +1,13 @@
+# TrendCutFlow robots.txt
+# Allow search engine crawling of all public marketing pages.
+# Disallow private user dashboard and processing routes.
+
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /processing
+Disallow: /editor
+Disallow: /history
+
+# Sitemap
+Sitemap: https://trendcutflow.com/sitemap.xml

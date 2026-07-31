@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useAppState } from './store/appStore';
 import { useAuth } from './context/AuthContext';
+import { useDocumentHead, SEO, type HeadMeta } from './lib/seo';
 import ErrorBoundary from './components/ErrorBoundary';
 import Header from './components/Header';
 import Footer from './components/Footer';
@@ -28,6 +29,22 @@ export default function App() {
   const [showProfile, setShowProfile]         = useState(false);
   const [showPreferences, setShowPreferences] = useState(false);
   const [legalPage, setLegalPage]             = useState<LegalPage>(null);
+
+  // Dynamic SEO head based on current screen
+  const headMeta: HeadMeta = useMemo(() => {
+    if (legalPage === 'terms')   return SEO.terms;
+    if (legalPage === 'privacy') return SEO.privacy;
+    if (legalPage === 'refund')  return SEO.refund;
+    if (legalPage === 'contact') return SEO.contact;
+    if (!auth.user) return SEO.auth;
+    switch (state.screen) {
+      case 'processing': return SEO.processing;
+      case 'editor':     return SEO.editor;
+      case 'history':    return SEO.history;
+      default:           return SEO.dashboard;
+    }
+  }, [legalPage, auth.user, state.screen]);
+  useDocumentHead(headMeta);
 
   useEffect(() => {
     app.setAuthUser(auth.user);
