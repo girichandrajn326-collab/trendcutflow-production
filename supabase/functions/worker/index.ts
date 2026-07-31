@@ -379,6 +379,7 @@ async function runPipeline(sb: SupabaseClient, ctx: PipelineCtx): Promise<void> 
         hasAudio:          true,
         videoDurationSecs: 0,
         sourceTitle:       ctx.sourceUrl ?? ctx.fileName,
+        sourceVideoUrl:    videoUrl,
         clips,
         transcriptPreview: transcriptText.slice(0, 500),
       },

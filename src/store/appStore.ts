@@ -229,6 +229,7 @@ interface JobResult {
   hasAudio: boolean;
   videoDurationSecs?: number;
   sourceTitle?: string;
+  sourceVideoUrl?: string;
   clips: Array<{
     startTime: number;
     endTime: number;
@@ -260,6 +261,7 @@ function buildClipsFromResult(result: JobResult): Clip[] {
       hashtags: r.hashtags,
       algorithmicTags: r.algorithmicTags,
     },
+    sourceVideoUrl: result.sourceVideoUrl,
     noAudio: !result.hasAudio,
   }));
 }

@@ -16,9 +16,6 @@ function getStyleSeedVariation(seed: number): CSSProperties {
   };
 }
 import { formatScheduledTime, formatScheduledShort, executePublish } from '../lib/publishQueue';
-import { trimVideoClip } from '../lib/videoProcessor';
-import { burnSubtitles } from '../lib/ffmpegClient';
-import { renderClipWithSubtitles } from '../lib/canvasRenderer';
 import { initiateYouTubeOAuth } from '../lib/oauthManager';
 import { supabase } from '../lib/supabase';
 
@@ -62,9 +59,6 @@ export default function EditorScreen({
   const [editingTitleIdx, setEditingTitleIdx]   = useState<number | null>(null);
   const [wordEdits, setWordEdits]               = useState<Record<number, string>>({});
   const [editingWordIdx, setEditingWordIdx]     = useState<number | null>(null);
-  // Client-side trimmed clip: blob URL produced by FFmpeg.wasm, keyed per clip id
-  const [clipBlobUrls, setClipBlobUrls]         = useState<Record<string, string>>({});
-  const [trimming, setTrimming]                 = useState(false);
   const [exporting, setExporting]               = useState(false);
   const [publishing, setPublishing]             = useState(false);
   const [ytConnected, setYtConnected]           = useState<boolean | null>(null);
@@ -77,22 +71,34 @@ export default function EditorScreen({
   const schedDropRef                            = useRef<HTMLDivElement>(null);
 
   const transcriptRef = useRef<HTMLDivElement>(null);
-  const playRef       = useRef<ReturnType<typeof setInterval> | null>(null);
   // drag-scrub state
   const scrubbing     = useRef(false);
 
   // ── Playback interval ──────────────────────────────────────────────────────
+  // Advances the active caption word based on the video's actual currentTime.
   useEffect(() => {
     if (!clip?.transcript?.length) return;
-    if (isPlaying) {
-      playRef.current = setInterval(() => {
-        onSetActiveWord((state.activeWordIndex + 1) % (clip?.transcript?.length ?? 1));
-      }, 340);
-    } else {
-      if (playRef.current) clearInterval(playRef.current);
+    const v = videoRef.current;
+    if (!v) return;
+
+    function onTimeUpdate() {
+      const vid = videoRef.current;
+      if (!vid || !clip?.transcript?.length) return;
+      const t = vid.currentTime;
+      // Find the word whose time range contains the current playback position
+      const idx = clip.transcript.findIndex(w => t >= w.startMs / 1000 && t <= w.endMs / 1000);
+      if (idx >= 0 && idx !== state.activeWordIndex) {
+        onSetActiveWord(idx);
+      }
+      // Loop within clip segment
+      if (t >= clip.endTime) {
+        vid.currentTime = clip.startTime;
+        if (isPlaying) vid.play().catch(() => {});
+      }
     }
-    return () => { if (playRef.current) clearInterval(playRef.current); };
-  }, [isPlaying, state.activeWordIndex, clip?.transcript?.length, onSetActiveWord]);
+    v.addEventListener('timeupdate', onTimeUpdate);
+    return () => v.removeEventListener('timeupdate', onTimeUpdate);
+  }, [isPlaying, clip, state.activeWordIndex, onSetActiveWord]);
 
   // Reset on clip switch
   useEffect(() => {
@@ -162,36 +168,6 @@ export default function EditorScreen({
     }
   }, [clip, ytConnected, handleConnectYouTube]);
 
-  // Trim current clip client-side when an uploaded file is available.
-  // Runs once per clip id; skips if we already have a blob URL for it.
-  useEffect(() => {
-    if (!clip) return;
-    const uploadedFile = state.uploadedFile;
-    if (!uploadedFile) return;
-    if (clipBlobUrls[clip.id]) return;
-
-    let cancelled = false;
-    setTrimming(true);
-    trimVideoClip(uploadedFile, clip.startTime, clip.endTime)
-      .then((blobUrl) => {
-        if (cancelled) { URL.revokeObjectURL(blobUrl); return; }
-        setClipBlobUrls(prev => ({ ...prev, [clip.id]: blobUrl }));
-      })
-      .catch(() => { /* fall back to thumbnail or source URL */ })
-      .finally(() => { if (!cancelled) setTrimming(false); });
-
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip?.id, state.uploadedFile]);
-
-  // Revoke all blob URLs when the component unmounts to free memory.
-  useEffect(() => {
-    return () => {
-      Object.values(clipBlobUrls).forEach(URL.revokeObjectURL);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Close schedule dropdown on outside click.
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -218,61 +194,48 @@ export default function EditorScreen({
 
   const handleExport = useCallback(async () => {
     if (!clip) return;
-    const uploadedFile = state.uploadedFile;
-    if (!uploadedFile) {
-      alert('Export requires the original video file. Please go back and re-upload it.');
+    const sourceUrl = clip.sourceVideoUrl ?? (state.uploadedFile ? URL.createObjectURL(state.uploadedFile) : null);
+    if (!sourceUrl) {
+      alert('Original video is not available for export.');
       return;
     }
     setExporting(true);
     try {
-      const safeName = `${(clip?.title ?? 'clip').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.webm`;
-
-      // Canvas renderer: trims to 9:16, burns subtitles, works without FFmpeg/COEP headers
-      const blob = await renderClipWithSubtitles(uploadedFile, {
-        startTime: clip?.startTime ?? 0,
-        endTime: clip?.endTime ?? 0,
-        words: (clip?.transcript ?? []).map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
-        style: state.subtitlePreset,
-        styleSeed: state.randomStyleSeed,
-      });
-
-      if (blob) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = safeName;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 8000);
-        return;
-      }
-
-      // Canvas render failed — try FFmpeg path (requires COEP headers)
-      let blobUrl = clipBlobUrls[clip?.id ?? ''];
-      if (!blobUrl) {
-        blobUrl = await trimVideoClip(uploadedFile, clip?.startTime ?? 0, clip?.endTime ?? 0);
-        setClipBlobUrls(prev => ({ ...prev, [clip?.id ?? '']: blobUrl }));
-      }
-      const rawRes = await fetch(blobUrl);
-      const rawBlob = await rawRes.blob();
-      const burned = await burnSubtitles(rawBlob, {
-        words: (clip?.transcript ?? []).map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
-        style: state.subtitlePreset,
-        styleSeed: state.randomStyleSeed,
-      });
-      const finalBlob = burned ?? rawBlob;
-      const url = URL.createObjectURL(finalBlob);
+      const safeName = `${(clip?.title ?? 'clip').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.txt`;
+      // Download the clip metadata + transcript as a text file (no server-side rendering)
+      const lines = [
+        `Clip: ${clip.title}`,
+        `Time range: ${clip.startTime}s - ${clip.endTime}s`,
+        '',
+        'Viral Titles:',
+        ...(clip.metadata?.viralTitles ?? []).map((t, i) => `  ${i + 1}. ${t}`),
+        '',
+        'SEO Description:',
+        `  ${clip.metadata?.seoDescription ?? ''}`,
+        '',
+        'Hashtags:',
+        `  ${(clip.metadata?.hashtags ?? []).join(' ')}`,
+        '',
+        'Algorithmic Tags:',
+        `  ${(clip.metadata?.algorithmicTags ?? []).join(', ')}`,
+        '',
+        'Transcript:',
+        (clip.transcript ?? []).map(w => w.word).join(' '),
+      ];
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = safeName.replace('.webm', '.mp4');
+      a.download = safeName;
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     } catch (err) {
       console.error('Export failed:', err);
       alert('Export failed. Please try again.');
     } finally {
       setExporting(false);
     }
-  }, [clip, clipBlobUrls, state.uploadedFile, state.subtitlePreset, state.randomStyleSeed]);
+  }, [clip, state.uploadedFile]);
 
   // ── Scrub-drag: click or drag across transcript updates active word ─────────
   const handleTranscriptPointerDown = useCallback((e: React.PointerEvent) => {
@@ -302,6 +265,21 @@ export default function EditorScreen({
   }, [clip?.transcript]);
 
   const styleSeedCss = getStyleSeedVariation(randomStyleSeed);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Seek to clip start when switching clips or when source URL changes
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = clip?.startTime ?? 0;
+  }, [activeClipIndex, clip?.sourceVideoUrl, clip?.startTime]);
+
+  // Play/pause the actual video element
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (isPlaying) { v.play().catch(() => {}); } else { v.pause(); }
+  }, [isPlaying]);
 
   // Build display words (with any inline edits applied)
   const displayTranscript: TranscriptWord[] = (clip?.transcript ?? []).map((w, i) =>
@@ -366,22 +344,23 @@ export default function EditorScreen({
                 {/* Notch */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-16 h-5 bg-slate-700 rounded-b-2xl z-10" />
 
-                {/* Background: trimmed blob > source URL at timestamp > Pexels thumbnail */}
-                {clipBlobUrls[clip.id] ? (
+                {/* Background: real uploaded video via signed storage URL, or local file */}
+                {clip.sourceVideoUrl ? (
                   <video
-                    src={clipBlobUrls[clip.id] ?? ''}
+                    ref={videoRef}
+                    src={clip.sourceVideoUrl}
                     className="absolute inset-0 w-full h-full object-cover"
-                    autoPlay={isPlaying}
-                    loop
                     muted
                     playsInline
+                    crossOrigin="anonymous"
                   />
-                ) : clip.sourceVideoUrl ? (
-                  <SourceVideoPreview
-                    src={clip.sourceVideoUrl}
-                    startTime={clip.startTime}
-                    endTime={clip.endTime}
-                    isPlaying={isPlaying}
+                ) : state.uploadedFile ? (
+                  <video
+                    ref={videoRef}
+                    src={URL.createObjectURL(state.uploadedFile)}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    muted
+                    playsInline
                   />
                 ) : (
                   <img
@@ -389,15 +368,6 @@ export default function EditorScreen({
                     alt={clip.title ?? ''}
                     className="absolute inset-0 w-full h-full object-cover"
                   />
-                )}
-                {/* Trimming indicator */}
-                {trimming && (
-                  <div className="absolute top-8 left-0 right-0 flex justify-center z-20">
-                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/70 text-[9px] text-cyan-300 font-medium">
-                      <span className="w-2 h-2 border border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                      Trimming…
-                    </span>
-                  </div>
                 )}
                 {/* Scrim */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent" />
@@ -702,61 +672,6 @@ export default function EditorScreen({
         </div>
       </div>
     </div>
-  );
-}
-
-// ─── SourceVideoPreview ───────────────────────────────────────────────────────
-// Shows a URL-sourced video seeked to the clip's start time.
-
-function SourceVideoPreview({
-  src, startTime, endTime, isPlaying,
-}: {
-  src: string;
-  startTime: number;
-  endTime: number;
-  isPlaying: boolean;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.currentTime = startTime;
-  }, [startTime, src]);
-
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (isPlaying) {
-      v.play().catch(() => {});
-    } else {
-      v.pause();
-    }
-  }, [isPlaying]);
-
-  // Loop within the clip segment
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    function handleTimeUpdate() {
-      if (v && v.currentTime >= endTime) {
-        v.currentTime = startTime;
-        if (isPlaying) v.play().catch(() => {});
-      }
-    }
-    v.addEventListener('timeupdate', handleTimeUpdate);
-    return () => v.removeEventListener('timeupdate', handleTimeUpdate);
-  }, [startTime, endTime, isPlaying]);
-
-  return (
-    <video
-      ref={videoRef}
-      src={src}
-      className="absolute inset-0 w-full h-full object-cover"
-      muted
-      playsInline
-      crossOrigin="anonymous"
-    />
   );
 }
 
