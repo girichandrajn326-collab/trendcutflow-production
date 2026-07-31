@@ -19,14 +19,13 @@ async function logRenderOutcome(
   try {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-    await fetch(`${supabaseUrl}/functions/v1/process-video?action=render-log`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ status, ...opts }),
+    await supabase.from('processing_logs').insert({
+      user_id: session.user.id,
+      step: 'render',
+      status,
+      message: opts?.message ?? null,
+      error_code: opts?.errorCode ?? null,
+      duration_ms: opts?.durationMs ?? null,
     });
   } catch {
     // Non-fatal — observability only

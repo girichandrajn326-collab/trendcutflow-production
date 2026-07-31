@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoStatus } from '../types/database';
 import type { AuthUser } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
+import { transcribeVideo, findViralClips } from '../lib/ai';
 
 export type AppScreen = 'intake' | 'processing' | 'editor' | 'history';
 export type SubtitlePreset = 'hormozi' | 'minimalist' | 'cyberpunk';
@@ -641,6 +642,34 @@ export function useAppState() {
 
   // ── Pipeline ───────────────────────────────────────────────────────────────
 
+  const updateJobStatus = useCallback(async (
+    jobId: string,
+    status: string,
+    stepDetail?: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    await supabase.from('processing_jobs').update({
+      status,
+      step_detail: stepDetail ?? null,
+      updated_at: new Date().toISOString(),
+      ...extra,
+    }).eq('id', jobId);
+  }, []);
+
+  const insertLog = useCallback(async (
+    userId: string,
+    step: string,
+    status: 'pending' | 'success' | 'error',
+    message?: string,
+  ) => {
+    await supabase.from('processing_logs').insert({
+      user_id: userId,
+      step,
+      status,
+      message: message ?? null,
+    });
+  }, []);
+
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
     if (!source) return;
@@ -663,9 +692,8 @@ export function useAppState() {
     }));
 
     const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
     const userId = session?.user?.id;
-    if (!token || !userId) {
+    if (!userId) {
       setState(s => ({
         ...s,
         pipelineError: 'Not authenticated. Please sign in again.',
@@ -674,20 +702,26 @@ export function useAppState() {
       return;
     }
 
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    // ── Credit pre-check ──────────────────────────────────────────────────────
+    const { data: canProcess } = await supabase.rpc('can_process_video', { uid: userId });
+    if (!canProcess) {
+      setState(s => ({
+        ...s,
+        screen: 'intake',
+        pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
+        pipelineError: null,
+        isUpgradeModalOpen: true,
+      }));
+      return;
+    }
 
     let jobId: string;
+    let storagePath: string;
+    let sourceUrl: string | null = null;
+    let sourceType: 'file' | 'url' = 'file';
+    let fileName: string;
+
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
-
-      let storagePath: string;
-      let sourceUrl: string | null = null;
-      let sourceType: 'file' | 'url' = 'file';
-      let fileName: string;
-
       if (source instanceof File) {
         if (source.size > 500 * 1024 * 1024) {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');
@@ -696,6 +730,7 @@ export function useAppState() {
         const ext = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
         storagePath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
         fileName = source.name || 'video.mp4';
+        sourceType = 'file';
 
         setState(s => ({
           ...s,
@@ -709,7 +744,6 @@ export function useAppState() {
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
       } else {
-        // YouTube/external URL — download via download-video edge function, then upload to storage
         sourceUrl = source;
         sourceType = 'url';
 
@@ -718,19 +752,9 @@ export function useAppState() {
           pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video from URL…'),
         }));
 
-        const DOWNLOAD_URL = `${supabaseUrl}/functions/v1/download-video`;
-        console.log('[download-video] Calling:', DOWNLOAD_URL, { url: source });
-        const dlRes = await fetch(DOWNLOAD_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ url: source }),
-        });
-
-        if (!dlRes.ok) {
-          let errMsg = `Download failed (HTTP ${dlRes.status})`;
-          try { const e = await dlRes.json(); if (e.error) errMsg = e.error; } catch { /* ignore */ }
-          throw new Error(errMsg);
-        }
+        // Download the video directly in the browser
+        const dlRes = await fetch(source);
+        if (!dlRes.ok) throw new Error(`Could not download video (HTTP ${dlRes.status})`);
 
         const videoBlob = await dlRes.blob();
         if (videoBlob.size === 0) throw new Error('Downloaded video is empty.');
@@ -739,8 +763,7 @@ export function useAppState() {
           throw new Error('Video too large (max 500 MB). Please try a shorter video.');
         }
 
-        const titleHeader = dlRes.headers.get('X-Video-Title') ?? 'video';
-        fileName = `${decodeURIComponent(titleHeader)}.mp4`;
+        fileName = 'video.mp4';
         storagePath = `${userId}/uploads/${crypto.randomUUID()}.mp4`;
 
         setState(s => ({
@@ -756,61 +779,29 @@ export function useAppState() {
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
       }
 
+      // ── Insert processing_jobs row directly via supabase-js ──────────────────
+      jobId = crypto.randomUUID();
+      const { error: insertErr } = await supabase.from('processing_jobs').insert({
+        id: jobId,
+        user_id: userId,
+        storage_path: storagePath,
+        source_type: sourceType,
+        source_url: sourceUrl,
+        original_name: fileName,
+        status: 'queued',
+        progress: 0,
+      });
+
+      if (insertErr) throw new Error(`Failed to create job: ${insertErr.message}`);
+
       setState(s => ({
         ...s,
-        pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Starting AI pipeline…'),
+        pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Video uploaded — starting AI analysis…'),
       }));
-
-      const START_JOB_URL = `${supabaseUrl}/functions/v1/start-job`;
-      console.log('[start-job] Calling:', START_JOB_URL, { storagePath, sourceUrl, sourceType, fileName });
-      let res: Response;
-      try {
-        res = await fetch(START_JOB_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ storagePath, sourceUrl, sourceType, fileName }),
-        });
-      } catch (fetchErr) {
-        const detail = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-        console.error('[start-job] Network error:', detail);
-        throw new Error(`Could not reach the server (${detail}). Check your connection and try again.`);
-      }
-
-      if (!res.ok) {
-        let errBody: string = '';
-        let err: { error?: string } = { error: 'Failed to start job' };
-        try {
-          errBody = await res.text();
-          err = JSON.parse(errBody);
-        } catch { /* ignore */ }
-        console.error(`[start-job] HTTP ${res.status}:`, errBody || err);
-        if (res.status === 402) {
-          setState(s => ({
-            ...s,
-            screen: 'intake',
-            pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
-            pipelineError: null,
-            isUpgradeModalOpen: true,
-          }));
-          return;
-        }
-        throw new Error(err.error ?? `start-job returned ${res.status}`);
-      }
-
-      let data: { jobId?: string };
-      try {
-        data = await res.json();
-      } catch (parseErr) {
-        console.error('[start-job] Could not parse response:', parseErr);
-        throw new Error('Server returned an unreadable response');
-      }
-
-      jobId = data.jobId ?? '';
-      if (!jobId) throw new Error('Server did not return a jobId');
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start processing job';
-      console.error('[pipeline] Trigger failed:', err);
+      console.error('[pipeline] Setup failed:', err);
       setState(s => ({
         ...s,
         pipelineError: msg,
@@ -819,12 +810,163 @@ export function useAppState() {
       return;
     }
 
-    setState(s => ({
-      ...s,
-      pipeline: setStepStatus(s.pipeline, 'download', 'done', 'Video ready — AI pipeline started'),
-    }));
+    // ── Run the pipeline client-side ──────────────────────────────────────────
+    (async () => {
+      try {
+        // Step 1: Generate signed URL to download the video from storage
+        await updateJobStatus(jobId, 'generating_url', 'Preparing video for processing…');
+        await insertLog(userId, 'generate_signed_url', 'pending', 'Generating signed URL for storage path');
 
-    // ── Poll processing_jobs every 2 seconds ────────────────────────────────
+        const { data: signedData, error: signedErr } = await supabase.storage
+          .from('videos')
+          .createSignedUrl(storagePath, 600);
+
+        if (signedErr || !signedData?.signedUrl) {
+          throw new Error(`Failed to generate signed URL: ${signedErr?.message ?? 'No URL returned'}`);
+        }
+
+        const videoUrl = signedData.signedUrl;
+        await insertLog(userId, 'generate_signed_url', 'success', 'Signed URL generated');
+
+        // Step 2: Download video bytes
+        await updateJobStatus(jobId, 'downloading', 'Downloading video file…');
+        await insertLog(userId, 'download_video', 'pending', 'Downloading video from storage');
+
+        const dlRes = await fetch(videoUrl);
+        if (!dlRes.ok) throw new Error(`Download failed: HTTP ${dlRes.status}`);
+        const videoArrayBuffer = await dlRes.arrayBuffer();
+        const videoBytes = new Uint8Array(videoArrayBuffer);
+
+        await insertLog(userId, 'download_video', 'success',
+          `Downloaded ${Math.round(videoBytes.length / 1024 / 1024)} MB`);
+
+        // Step 3: Transcribe with Groq Whisper
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'transcribe', 'active', 'Transcribing audio with Groq Whisper…'),
+        }));
+        await updateJobStatus(jobId, 'transcribing', 'Transcribing audio with Groq Whisper…');
+        await insertLog(userId, 'transcribe', 'pending', `Sending ${Math.round(videoBytes.length / 1024 / 1024)} MB to Groq Whisper`);
+
+        const videoBlob = new Blob([videoBytes], { type: 'video/mp4' });
+        const videoFile = new File([videoBlob], fileName, { type: 'video/mp4' });
+        const { text: transcriptText, words } = await transcribeVideo(videoFile);
+
+        await insertLog(userId, 'transcribe', 'success',
+          `Transcribed ${transcriptText.split(/\s+/).filter(Boolean).length} words`);
+
+        // Step 4: Detect viral clips with GPT-4o-mini
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'detect', 'active', 'Detecting viral segments with GPT-4o-mini…'),
+        }));
+        await updateJobStatus(jobId, 'detecting', 'Detecting viral segments with GPT-4o-mini…');
+        await insertLog(userId, 'segment_detection', 'pending', 'Sending transcript to GPT-4o-mini');
+
+        const rawClips = await findViralClips(transcriptText);
+
+        await insertLog(userId, 'segment_detection', 'success',
+          `${rawClips.length} segments identified by GPT-4o-mini`);
+
+        // Step 5: Build clip results with transcript words
+        const clips = rawClips.slice(0, 5).map(r => ({
+          ...r,
+          transcriptWords: words.filter(
+            (w: { start_ms: number; end_ms: number }) =>
+              w.start_ms / 1000 >= r.startTime && w.end_ms / 1000 <= r.endTime
+          ),
+        }));
+
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'detect', 'done', `${clips.length} clips ready. Finalising…`),
+        }));
+        await updateJobStatus(jobId, 'slicing', `${clips.length} clips ready. Finalising…`);
+
+        // Step 6: Consume credit
+        let creditConsumed = false;
+        const { error: creditErr } = await supabase.rpc('consume_credit', { uid: userId });
+        if (creditErr) {
+          await insertLog(userId, 'consume_credit', 'error', creditErr.message);
+        } else {
+          creditConsumed = true;
+        }
+
+        // Step 7: Persist video_sources + repurposed_clips
+        try {
+          const sourceTitle = sourceUrl ?? fileName;
+          const { data: vsRow } = await supabase
+            .from('video_sources')
+            .insert({
+              user_id: userId,
+              title: sourceTitle,
+              source_url: sourceUrl ?? '',
+              status: 'COMPLETED',
+              duration: 0,
+            })
+            .select('id')
+            .maybeSingle();
+
+          if (vsRow) {
+            await supabase.from('repurposed_clips').insert(
+              clips.map(c => ({
+                video_source_id: vsRow.id,
+                start_time: c.startTime,
+                end_time: c.endTime,
+                clip_storage_url: '',
+                ai_title: c.viralTitles[0],
+                ai_description: c.seoDescription,
+                is_queued: false,
+                metadata_json: {
+                  viralTitles: c.viralTitles,
+                  seoDescription: c.seoDescription,
+                  hashtags: c.hashtags,
+                  algorithmicTags: c.algorithmicTags,
+                },
+                source_video_url: sourceUrl ?? '',
+                transcript_json: { words: c.transcriptWords },
+              })),
+            );
+          }
+        } catch (persistErr) {
+          console.error('[pipeline] DB persist failed (non-fatal):', persistErr);
+          await insertLog(userId, 'db_persist', 'error',
+            persistErr instanceof Error ? persistErr.message : String(persistErr));
+        }
+
+        // Step 8: Mark job completed
+        await updateJobStatus(jobId, 'completed', `${clips.length} clips extracted from transcript`, {
+          progress: 100,
+          credits_consumed: creditConsumed,
+          result: {
+            hasAudio: true,
+            videoDurationSecs: 0,
+            sourceTitle: sourceUrl ?? fileName,
+            sourceVideoUrl: sourceUrl ?? '',
+            clips,
+            transcriptPreview: transcriptText.slice(0, 500),
+          },
+        });
+        await insertLog(userId, 'job_complete', 'success',
+          `Job finished — ${clips.length} clips from transcript`);
+
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[pipeline] FAILED:', msg);
+        await updateJobStatus(jobId, 'failed', undefined, { error_message: msg });
+        await insertLog(userId, 'job_failed', 'error', msg).catch(() => {});
+
+        setState(s => ({
+          ...s,
+          pipelineError: msg,
+          pipeline: s.pipeline.map(step =>
+            step.status === 'active' ? { ...step, status: 'error' as const, detail: msg } : step
+          ),
+        }));
+      }
+    })();
+
+    // ── Poll processing_jobs every 2 seconds for status updates ───────────────
     if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
 
     pollingIntervalRef.current = setInterval(async () => {
@@ -840,9 +982,9 @@ export function useAppState() {
         setState(s => ({
           ...s,
           pipeline: mapJobStatusToPipeline(
-            s.pipeline, 
-            jobRow.status, 
-            jobRow.step_detail ?? null, 
+            s.pipeline,
+            jobRow.status,
+            jobRow.step_detail ?? null,
             jobRow.has_audio ?? null
           ),
         }));
@@ -906,7 +1048,7 @@ export function useAppState() {
       }
     }, 2000);
 
-  }, [state.uploadedFile, state.inputUrl, state.user.credits, addToast]);
+  }, [state.uploadedFile, state.inputUrl, state.user.credits, addToast, updateJobStatus, insertLog]);
 
   return {
     state,

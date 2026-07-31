@@ -66,6 +66,7 @@ export function formatScheduledShort(date: Date): string {
 }
 
 import { supabase } from './supabase';
+import { refreshAccessToken } from './oauthManager';
 
 // Add clip to publish queue in Supabase
 export async function addClipToQueue(
@@ -100,36 +101,51 @@ export async function executePublish(queueItem: QueuedClip): Promise<void> {
   if (clipErr || !clip) throw new Error('Clip not found');
 
   if (queueItem.platform === 'youtube_shorts') {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    // Refresh the access token if needed
+    const refreshResult = await refreshAccessToken(queueItem.userId, 'youtube');
+    if (!refreshResult.success || !refreshResult.newAccessToken) {
+      throw new Error(refreshResult.error ?? 'YouTube authentication expired. Please reconnect your account.');
+    }
+    const accessToken = refreshResult.newAccessToken;
 
     // Fetch the video blob from storage URL
     const videoRes = await fetch(clip.clip_storage_url);
     if (!videoRes.ok) throw new Error('Could not fetch clip video');
     const videoBlob = await videoRes.blob();
-    const videoFile = new File([videoBlob], 'clip.mp4', { type: 'video/mp4' });
 
     const meta = (clip.metadata_json as { hashtags?: string[] }) ?? {};
     const tags = (meta.hashtags ?? []).join(',');
 
-    const form = new FormData();
-    form.append('video', videoFile);
-    form.append('title', clip.ai_title);
-    form.append('description', clip.ai_description);
-    form.append('tags', tags);
-
-    const res = await fetch(`${supabaseUrl}/functions/v1/youtube-oauth?action=upload`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-        'Apikey': anonKey,
+    // Upload to YouTube via the YouTube Data API directly from the browser
+    const metadata = {
+      snippet: {
+        title: clip.ai_title,
+        description: clip.ai_description,
+        tags: tags ? tags.split(',') : [],
+        categoryId: '22',
       },
-      body: form,
-    });
+      status: {
+        privacyStatus: 'public',
+        selfDeclaredMadeForKids: false,
+      },
+    };
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? 'YouTube upload failed');
+    const formData = new FormData();
+    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    formData.append('video', videoBlob, 'clip.mp4');
+
+    const uploadRes = await fetch(
+      'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      },
+    );
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.text();
+      throw new Error(`YouTube upload failed: ${err}`);
     }
   } else {
     // Instagram Reels / Snapchat — log pending platform support

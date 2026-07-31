@@ -1,9 +1,8 @@
-// AI processing service — calls the process-video Edge Function which proxies
-// Groq Whisper + OpenAI GPT-4o-mini server-side (keys never reach the browser).
+// AI processing service — calls Groq Whisper + OpenAI GPT-4o-mini directly
+// from the browser. API keys are read from Vite env vars.
 // Throws real errors — no mock/sample fallback data.
 
 import type { TranscriptWord } from '../types/database';
-import { supabase } from './supabase';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,76 +26,99 @@ export interface AudioCheckResult {
   method: 'ffprobe' | 'binary-scan' | 'assumed';
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Config ───────────────────────────────────────────────────────────────────
 
-async function getAuthHeader(): Promise<string | null> {
-  const { data: { session } } = await supabase.auth.getSession();
-  return session ? `Bearer ${session.access_token}` : null;
+const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const GROQ_TIMEOUT_MS = 300_000;
+const OPENAI_TIMEOUT_MS = 120_000;
+
+function getGroqKey(): string {
+  const key = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
+  if (!key) throw new Error('Groq API key is not configured. Add VITE_GROQ_API_KEY to your environment.');
+  return key;
 }
 
-function edgeFnUrl(action: string): string {
-  const base = import.meta.env.VITE_SUPABASE_URL as string;
-  return `${base}/functions/v1/process-video?action=${action}`;
+function getOpenAIKey(): string {
+  const key = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
+  if (!key) throw new Error('OpenAI API key is not configured. Add VITE_OPENAI_API_KEY to your environment.');
+  return key;
 }
 
 // ─── Step 0: Pre-flight audio check ──────────────────────────────────────────
+// Browser cannot run ffprobe, so we assume audio is present and let the
+// transcription step determine the real answer.
 
-export async function checkVideoAudio(videoFile: File): Promise<AudioCheckResult> {
-  const authHeader = await getAuthHeader();
-  if (!authHeader) return { hasAudio: true, method: 'assumed' };
-
-  try {
-    const chunk    = videoFile.slice(0, 524288);
-    const formData = new FormData();
-    formData.append('file', chunk, videoFile.name);
-
-    const res = await fetch(edgeFnUrl('check-audio'), {
-      method: 'POST',
-      headers: { Authorization: authHeader },
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error ?? `Audio check failed (${res.status})`);
-    }
-
-    return await res.json() as AudioCheckResult;
-  } catch (err) {
-    throw new Error(`Audio check failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
+export async function checkVideoAudio(_videoFile: File): Promise<AudioCheckResult> {
+  return { hasAudio: true, method: 'assumed' };
 }
 
 // ─── Step 1: Transcribe ───────────────────────────────────────────────────────
 
 export async function transcribeVideo(videoFile: File | string): Promise<TranscriptResult> {
-  const authHeader = await getAuthHeader();
-  if (!authHeader) throw new Error('Not authenticated — please sign in.');
-
   try {
-    const formData = new FormData();
+    let file: File | Blob;
+    let fileName: string;
+
     if (typeof videoFile === 'string') {
       const res = await fetch(videoFile);
+      if (!res.ok) throw new Error(`Could not download video from storage (HTTP ${res.status})`);
       const blob = await res.blob();
-      formData.append('file', blob, 'audio.mp4');
+      file = blob;
+      fileName = 'audio.mp4';
     } else {
-      formData.append('file', videoFile, videoFile.name);
+      file = videoFile;
+      fileName = videoFile.name;
     }
 
-    const res = await fetch(edgeFnUrl('transcribe'), {
-      method: 'POST',
-      headers: { Authorization: authHeader },
-      body: formData,
-    });
+    const groqKey = getGroqKey();
+    const form = new FormData();
+    form.append('file', file, fileName);
+    form.append('model', 'whisper-large-v3');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'word');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(GROQ_TRANSCRIBE_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${groqKey}` },
+        body: form,
+        signal: controller.signal,
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeout);
+      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+        throw new Error(`Groq Whisper timed out after ${GROQ_TIMEOUT_MS / 1000}s`);
+      }
+      throw new Error(`Groq Whisper request failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+    }
+    clearTimeout(timeout);
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
-      if (res.status === 404) throw new Error('User profile not found. Please sign out and sign in again.');
-      throw new Error(err.error ?? `Transcription failed (${res.status}). Please try again.`);
+      const errText = await res.text().catch(() => '(no response body)');
+      throw new Error(`Groq Whisper returned HTTP ${res.status}: ${errText.slice(0, 500)}`);
     }
 
-    return await res.json();
+    const data = await res.json();
+    const words: TranscriptWord[] = (data.words ?? []).map(
+      (w: { word: string; start: number; end: number }, i: number) => ({
+        id: i,
+        word: w.word,
+        start_ms: Math.round(w.start * 1000),
+        end_ms: Math.round(w.end * 1000),
+      }),
+    );
+    const text: string = data.text ?? '';
+
+    if (!text && words.length === 0) {
+      throw new Error('Groq Whisper returned an empty transcript — the video may have no audio track.');
+    }
+
+    return { text, words };
   } catch (err) {
     if (err instanceof Error) throw err;
     throw new Error(`Transcription failed: ${String(err)}`);
@@ -106,39 +128,82 @@ export async function transcribeVideo(videoFile: File | string): Promise<Transcr
 // ─── Step 2: Find Viral Clips ─────────────────────────────────────────────────
 
 export async function findViralClips(transcriptText: string, videoDurationSecs?: number): Promise<ViralClipResult[]> {
-  const authHeader = await getAuthHeader();
-  if (!authHeader) throw new Error('Not authenticated — please sign in.');
+  const openAIKey = getOpenAIKey();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
 
   let res: Response;
   try {
-    res = await fetch(edgeFnUrl('detect-clips'), {
+    res = await fetch(OPENAI_CHAT_URL, {
       method: 'POST',
-      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript: transcriptText }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIKey}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.7,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'You are an elite viral video producer.' },
+          {
+            role: 'user',
+            content: `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
+
+For each segment provide:
+- startTime: start timestamp in seconds (float)
+- endTime: end timestamp in seconds (float, max 90s per clip)
+- viralTitles: array of exactly 3 attention-grabbing titles
+- seoDescription: 2-3 sentence SEO-optimized description
+- hashtags: array of 6-8 hashtags with # symbol
+- algorithmicTags: array of 5-6 keyword phrases (no # symbol)
+
+Respond with valid JSON only: { "clips": [ ... ] }
+
+Transcript:
+${transcriptText}`,
+          },
+        ],
+      }),
+      signal: controller.signal,
     });
   } catch (fetchErr) {
-    throw new Error(`Clip detection request failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+    clearTimeout(timeout);
+    if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+      throw new Error(`OpenAI GPT-4o-mini timed out after ${OPENAI_TIMEOUT_MS / 1000}s`);
+    }
+    throw new Error(`OpenAI request failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
   }
+  clearTimeout(timeout);
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    if (res.status === 402) throw new Error(err.error ?? 'Credit limit reached. Please upgrade your plan.');
-    if (res.status === 404) throw new Error('User profile not found. Please sign out and sign in again.');
-    throw new Error(err.error ?? `Clip detection failed (${res.status}). Please try again.`);
+    const errText = await res.text().catch(() => '(no response body)');
+    throw new Error(`OpenAI GPT-4o-mini returned HTTP ${res.status}: ${errText.slice(0, 500)}`);
   }
 
   const data = await res.json();
-  const clips = Array.isArray(data)
-    ? data.slice(0, 5)
-    : Array.isArray(data.clips) ? data.clips.slice(0, 5)
-    : Array.isArray(data.segments) ? data.segments.slice(0, 5)
-    : (Array.isArray(Object.values(data)[0]) ? (Object.values(data)[0] as ViralClipResult[]).slice(0, 5) : null);
-
-  if (!clips) {
-    throw new Error(`Clip detection returned unexpected response shape: ${JSON.stringify(data).slice(0, 300)}`);
+  const content = data.choices?.[0]?.message?.content ?? '';
+  if (!content) {
+    throw new Error('OpenAI GPT-4o-mini returned an empty response');
   }
 
-  return clampClipsToDuration(clips, videoDurationSecs);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (parseErr) {
+    throw new Error(`OpenAI returned invalid JSON: ${content.slice(0, 300)} (parse error: ${parseErr instanceof Error ? parseErr.message : String(parseErr)})`);
+  }
+
+  const clips = Array.isArray(parsed)
+    ? parsed
+    : (parsed as Record<string, unknown>)?.clips
+      ?? (parsed as Record<string, unknown>)?.segments
+      ?? Object.values(parsed).find((v): v is unknown[] => Array.isArray(v))
+      ?? [];
+
+  if (!Array.isArray(clips) || clips.length === 0) {
+    throw new Error(`OpenAI GPT-4o-mini returned no clips. Response: ${content.slice(0, 300)}`);
+  }
+
+  return clampClipsToDuration(clips as ViralClipResult[], videoDurationSecs);
 }
 
 function clampClipsToDuration(clips: ViralClipResult[], durationSecs?: number): ViralClipResult[] {
@@ -156,19 +221,4 @@ function clampClipsToDuration(clips: ViralClipResult[], durationSecs?: number): 
       endTime:   Math.round(end * 10) / 10,
     };
   });
-}
-
-// ─── Step 3: Increment credit after successful pipeline ───────────────────────
-
-export async function incrementCredit(): Promise<void> {
-  const authHeader = await getAuthHeader();
-  if (!authHeader) return;
-  try {
-    await fetch(edgeFnUrl('complete'), {
-      method: 'POST',
-      headers: { Authorization: authHeader },
-    });
-  } catch {
-    // Non-fatal: credit syncs on next page load via check-credits
-  }
 }

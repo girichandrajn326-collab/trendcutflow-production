@@ -1,5 +1,12 @@
-// Google OAuth token management — persists tokens encrypted in Supabase integrations table.
-// Tokens are stored per user per provider. Access tokens are short-lived (1h); refresh tokens live forever.
+// Google OAuth token management — persists tokens in Supabase integrations table.
+// Tokens are stored per user per provider. Access tokens are short-lived (1h);
+// refresh tokens live forever.
+//
+// The YouTube OAuth flow (authorize / callback / refresh / upload) was previously
+// proxied through the `youtube-oauth` Supabase Edge Function. That function is
+// unreachable from the custom domain due to persistent CORS errors, so the
+// client now talks to Google's OAuth2 endpoints directly. The YouTube Data API
+// upload is also performed client-side using the access token.
 
 import { supabase } from './supabase';
 
@@ -60,8 +67,7 @@ export async function loadStoredToken(userId: string, provider: 'youtube' | 'goo
   }
 }
 
-// Refresh access token via Google OAuth2 endpoint.
-// Calls the youtube-oauth Edge Function to keep client_secret server-side.
+// Refresh access token via Google OAuth2 endpoint (direct browser call).
 export async function refreshAccessToken(userId: string, provider: 'youtube' | 'google'): Promise<RefreshResult> {
   const stored = await loadStoredToken(userId, provider);
   if (!stored) return { success: false, error: 'No stored token found' };
@@ -70,19 +76,22 @@ export async function refreshAccessToken(userId: string, provider: 'youtube' | '
     return { success: true, newAccessToken: stored.accessToken, newExpiresAt: stored.expiresAt };
   }
 
-  try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-    const { data: { session } } = await supabase.auth.getSession();
+  const clientId = import.meta.env.VITE_YOUTUBE_CLIENT_ID as string | undefined;
+  const clientSecret = import.meta.env.VITE_YOUTUBE_CLIENT_SECRET as string | undefined;
+  if (!clientId || !clientSecret) {
+    return { success: false, error: 'YouTube OAuth client credentials are not configured. Add VITE_YOUTUBE_CLIENT_ID and VITE_YOUTUBE_CLIENT_SECRET to your environment.' };
+  }
 
-    const res = await fetch(`${supabaseUrl}/functions/v1/youtube-oauth?action=refresh`, {
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token ?? anonKey}`,
-        'Apikey': anonKey,
-      },
-      body: JSON.stringify({ refreshToken: stored.refreshToken }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: stored.refreshToken,
+        grant_type: 'refresh_token',
+      }),
     });
 
     if (!res.ok) {
@@ -114,7 +123,6 @@ export function tokenNeedsRefresh(token: OAuthToken): boolean {
 export async function revokeOAuthToken(userId: string, provider: 'youtube' | 'google'): Promise<void> {
   const stored = await loadStoredToken(userId, provider);
   if (stored?.refreshToken) {
-    // Best-effort revoke at Google
     await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(stored.refreshToken)}`, {
       method: 'POST',
     }).catch(() => {});
@@ -127,15 +135,73 @@ export async function revokeOAuthToken(userId: string, provider: 'youtube' | 'go
     .eq('platform', provider);
 }
 
-// Initiate YouTube OAuth flow — opens Google consent screen in a popup
+// Initiate YouTube OAuth flow — opens Google consent screen in a popup.
+// Uses the client-side OAuth flow (no edge function proxy).
 export function initiateYouTubeOAuth(userId: string): void {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-  const callbackUrl = `${supabaseUrl}/functions/v1/youtube-oauth?action=callback`;
+  const clientId = import.meta.env.VITE_YOUTUBE_CLIENT_ID as string | undefined;
+  if (!clientId) {
+    console.error('VITE_YOUTUBE_CLIENT_ID is not configured');
+    return;
+  }
+
+  const redirectUri = `${window.location.origin}/youtube-callback`;
   const params = new URLSearchParams({
-    action: 'authorize',
-    user_id: userId,
-    redirect_uri: callbackUrl,
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube',
+    access_type: 'offline',
+    prompt: 'consent',
+    state: userId,
   });
-  const authUrl = `${supabaseUrl}/functions/v1/youtube-oauth?${params}`;
+  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
   window.open(authUrl, 'youtube_oauth', 'width=600,height=700,scrollbars=yes');
+}
+
+// Exchange authorization code for tokens (called from the OAuth callback handler).
+// Uses the client-side OAuth flow.
+export async function exchangeCodeForTokens(
+  code: string,
+  userId: string,
+): Promise<RefreshResult> {
+  const clientId = import.meta.env.VITE_YOUTUBE_CLIENT_ID as string | undefined;
+  const clientSecret = import.meta.env.VITE_YOUTUBE_CLIENT_SECRET as string | undefined;
+  if (!clientId || !clientSecret) {
+    return { success: false, error: 'YouTube OAuth client credentials are not configured.' };
+  }
+
+  const redirectUri = `${window.location.origin}/youtube-callback`;
+
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      return { success: false, error: err };
+    }
+
+    const result = await res.json();
+    const token: OAuthToken = {
+      accessToken: result.access_token,
+      refreshToken: result.refresh_token,
+      expiresAt: Date.now() + (result.expires_in ?? 3600) * 1000,
+      scope: result.scope ?? 'youtube',
+      provider: 'youtube',
+    };
+    await storeRefreshToken(userId, token);
+
+    return { success: true, newAccessToken: token.accessToken, newExpiresAt: token.expiresAt };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
 }
