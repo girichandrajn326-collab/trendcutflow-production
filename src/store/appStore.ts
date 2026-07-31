@@ -719,6 +719,7 @@ export function useAppState() {
         }));
 
         const DOWNLOAD_URL = `${supabaseUrl}/functions/v1/download-video`;
+        console.log('[download-video] Calling:', DOWNLOAD_URL, { url: source });
         const dlRes = await fetch(DOWNLOAD_URL, {
           method: 'POST',
           headers,
@@ -761,6 +762,7 @@ export function useAppState() {
       }));
 
       const START_JOB_URL = `${supabaseUrl}/functions/v1/start-job`;
+      console.log('[start-job] Calling:', START_JOB_URL, { storagePath, sourceUrl, sourceType, fileName });
       let res: Response;
       try {
         res = await fetch(START_JOB_URL, {
@@ -769,8 +771,9 @@ export function useAppState() {
           body: JSON.stringify({ storagePath, sourceUrl, sourceType, fileName }),
         });
       } catch (fetchErr) {
-        console.error('[start-job] Network error:', fetchErr);
-        throw new Error('Could not reach the server. Check your connection and try again.');
+        const detail = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+        console.error('[start-job] Network error:', detail);
+        throw new Error(`Could not reach the server (${detail}). Check your connection and try again.`);
       }
 
       if (!res.ok) {
