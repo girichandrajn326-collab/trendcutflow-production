@@ -683,7 +683,10 @@ export function useAppState() {
         'Content-Type': 'application/json',
       };
 
-      let sourceUrl: string;
+      let storagePath: string;
+      let sourceUrl: string | null = null;
+      let sourceType: 'file' | 'url' = 'file';
+      let fileName: string;
 
       if (source instanceof File) {
         if (source.size > 500 * 1024 * 1024) {
@@ -691,7 +694,8 @@ export function useAppState() {
         }
 
         const ext = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
-        const uploadPath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
+        storagePath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
+        fileName = source.name || 'video.mp4';
 
         setState(s => ({
           ...s,
@@ -701,33 +705,71 @@ export function useAppState() {
 
         const { error: storageErr } = await supabase.storage
           .from('videos')
-          .upload(uploadPath, source, { contentType: source.type || 'video/mp4' });
+          .upload(storagePath, source, { contentType: source.type || 'video/mp4' });
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
-
-        sourceUrl = `${supabaseUrl}/storage/v1/object/public/videos/${uploadPath}`;
       } else {
+        // YouTube/external URL — download via download-video edge function, then upload to storage
         sourceUrl = source;
-      }
+        sourceType = 'url';
 
-      const body = JSON.stringify({ sourceUrl, userId });
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video from URL…'),
+        }));
+
+        const DOWNLOAD_URL = `${supabaseUrl}/functions/v1/download-video`;
+        const dlRes = await fetch(DOWNLOAD_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ url: source }),
+        });
+
+        if (!dlRes.ok) {
+          let errMsg = `Download failed (HTTP ${dlRes.status})`;
+          try { const e = await dlRes.json(); if (e.error) errMsg = e.error; } catch { /* ignore */ }
+          throw new Error(errMsg);
+        }
+
+        const videoBlob = await dlRes.blob();
+        if (videoBlob.size === 0) throw new Error('Downloaded video is empty.');
+
+        if (videoBlob.size > 500 * 1024 * 1024) {
+          throw new Error('Video too large (max 500 MB). Please try a shorter video.');
+        }
+
+        const titleHeader = dlRes.headers.get('X-Video-Title') ?? 'video';
+        fileName = `${decodeURIComponent(titleHeader)}.mp4`;
+        storagePath = `${userId}/uploads/${crypto.randomUUID()}.mp4`;
+
+        setState(s => ({
+          ...s,
+          pipeline: setStepStatus(s.pipeline, 'download', 'active',
+            `Uploading ${(videoBlob.size / 1024 / 1024).toFixed(1)} MB…`),
+        }));
+
+        const { error: storageErr } = await supabase.storage
+          .from('videos')
+          .upload(storagePath, videoBlob, { contentType: 'video/mp4' });
+
+        if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
+      }
 
       setState(s => ({
         ...s,
-        pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video (server-side)…'),
+        pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Starting AI pipeline…'),
       }));
 
-      const SWIFT_SERVICE_URL = 'https://yudfitjlleafafjyiwgg.supabase.co/functions/v1/swift-service';
-
+      const START_JOB_URL = `${supabaseUrl}/functions/v1/start-job`;
       let res: Response;
       try {
-        res = await fetch(SWIFT_SERVICE_URL, {
+        res = await fetch(START_JOB_URL, {
           method: 'POST',
           headers,
-          body,
+          body: JSON.stringify({ storagePath, sourceUrl, sourceType, fileName }),
         });
       } catch (fetchErr) {
-        console.error('[swift-service] Network error — could not reach server:', fetchErr);
+        console.error('[start-job] Network error:', fetchErr);
         throw new Error('Could not reach the server. Check your connection and try again.');
       }
 
@@ -737,10 +779,8 @@ export function useAppState() {
         try {
           errBody = await res.text();
           err = JSON.parse(errBody);
-        } catch {
-          // ignore non-json
-        }
-        console.error(`[swift-service] HTTP ${res.status} from ${SWIFT_SERVICE_URL}:`, errBody || err);
+        } catch { /* ignore */ }
+        console.error(`[start-job] HTTP ${res.status}:`, errBody || err);
         if (res.status === 402) {
           setState(s => ({
             ...s,
@@ -751,15 +791,14 @@ export function useAppState() {
           }));
           return;
         }
-        if (res.status === 413) throw new Error(err.error ?? 'File too large. Please use a YouTube URL or trim the video.');
-        throw new Error(err.error ?? `swift-service returned ${res.status}`);
+        throw new Error(err.error ?? `start-job returned ${res.status}`);
       }
 
       let data: { jobId?: string };
       try {
         data = await res.json();
       } catch (parseErr) {
-        console.error('[swift-service] Could not parse success response as JSON:', parseErr);
+        console.error('[start-job] Could not parse response:', parseErr);
         throw new Error('Server returned an unreadable response');
       }
 
@@ -768,7 +807,7 @@ export function useAppState() {
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to start processing job';
-      console.error('[swift-service] Pipeline trigger failed:', err);
+      console.error('[pipeline] Trigger failed:', err);
       setState(s => ({
         ...s,
         pipelineError: msg,
