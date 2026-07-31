@@ -728,7 +728,7 @@ export function useAppState() {
         }
 
         const ext = source.name.split('.').pop()?.toLowerCase() ?? 'mp4';
-        storagePath = `${userId}/uploads/${crypto.randomUUID()}.${ext}`;
+        const uploadPath = `${userId}/${crypto.randomUUID()}.${ext}`;
         fileName = source.name || 'video.mp4';
         sourceType = 'file';
 
@@ -738,25 +738,54 @@ export function useAppState() {
             `Uploading ${(source.size / 1024 / 1024).toFixed(1)} MB…`),
         }));
 
-        const { error: storageErr } = await supabase.storage
+        const { data: uploadData, error: storageErr } = await supabase.storage
           .from('videos')
-          .upload(storagePath, source, { contentType: source.type || 'video/mp4' });
+          .upload(uploadPath, source, { contentType: source.type || 'video/mp4' });
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
+        // Use the exact path returned by Supabase Storage — never reconstruct it
+        storagePath = uploadData?.path ?? uploadPath;
+        if (!storagePath) throw new Error('Upload succeeded but no storage path was returned. Please try again.');
       } else {
         sourceUrl = source;
         sourceType = 'url';
+
+        const isYouTube = /youtube\.com|youtu\.be/i.test(source);
+        const isInstagram = /instagram\.com/i.test(source);
+
+        if (!isYouTube && !isInstagram) {
+          throw new Error('Only YouTube and Instagram URLs are supported. Please paste a valid video URL.');
+        }
 
         setState(s => ({
           ...s,
           pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Downloading video from URL…'),
         }));
 
-        // Download the video directly in the browser
-        const dlRes = await fetch(source);
-        if (!dlRes.ok) throw new Error(`Could not download video (HTTP ${dlRes.status})`);
+        // Use the official supabase-js client to invoke the download-video edge
+        // function. The client routes through the Supabase API gateway which
+        // handles CORS correctly — no direct browser fetch to the video URL.
+        const { data: fnData, error: fnErr } = await supabase.functions.invoke('download-video', {
+          body: { url: source },
+        });
 
-        const videoBlob = await dlRes.blob();
+        if (fnErr) {
+          throw new Error(fnErr.message || 'Could not download the video. Please check the URL and try again.');
+        }
+
+        // The edge function returns the video as a binary stream; supabase-js
+        // exposes it as a Blob/ArrayBuffer in `data`.
+        let videoBlob: Blob;
+        if (fnData instanceof Blob) {
+          videoBlob = fnData;
+        } else if (fnData instanceof ArrayBuffer) {
+          videoBlob = new Blob([fnData], { type: 'video/mp4' });
+        } else if (fnData && typeof fnData === 'object' && 'error' in fnData) {
+          throw new Error((fnData as { error: string }).error);
+        } else {
+          throw new Error('Download returned an unexpected format. Please try again.');
+        }
+
         if (videoBlob.size === 0) throw new Error('Downloaded video is empty.');
 
         if (videoBlob.size > 500 * 1024 * 1024) {
@@ -764,7 +793,7 @@ export function useAppState() {
         }
 
         fileName = 'video.mp4';
-        storagePath = `${userId}/uploads/${crypto.randomUUID()}.mp4`;
+        const uploadPath = `${userId}/${crypto.randomUUID()}.mp4`;
 
         setState(s => ({
           ...s,
@@ -772,11 +801,13 @@ export function useAppState() {
             `Uploading ${(videoBlob.size / 1024 / 1024).toFixed(1)} MB…`),
         }));
 
-        const { error: storageErr } = await supabase.storage
+        const { data: uploadData, error: storageErr } = await supabase.storage
           .from('videos')
-          .upload(storagePath, videoBlob, { contentType: 'video/mp4' });
+          .upload(uploadPath, videoBlob, { contentType: 'video/mp4' });
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
+        storagePath = uploadData?.path ?? uploadPath;
+        if (!storagePath) throw new Error('Upload succeeded but no storage path was returned. Please try again.');
       }
 
       // ── Insert processing_jobs row directly via supabase-js ──────────────────
@@ -800,7 +831,10 @@ export function useAppState() {
       }));
 
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to start processing job';
+      const rawMsg = err instanceof Error ? err.message : 'Failed to start processing job';
+      const msg = rawMsg.includes('Failed to fetch') || rawMsg.includes('NetworkError')
+        ? 'Could not connect to the server. Please check your internet connection and try again.'
+        : rawMsg;
       console.error('[pipeline] Setup failed:', err);
       setState(s => ({
         ...s,
@@ -817,12 +851,21 @@ export function useAppState() {
         await updateJobStatus(jobId, 'generating_url', 'Preparing video for processing…');
         await insertLog(userId, 'generate_signed_url', 'pending', 'Generating signed URL for storage path');
 
+        if (!storagePath || storagePath.trim() === '') {
+          throw new Error('No storage path was saved for this upload. Please go back and try uploading the file again.');
+        }
+
         const { data: signedData, error: signedErr } = await supabase.storage
           .from('videos')
           .createSignedUrl(storagePath, 600);
 
         if (signedErr || !signedData?.signedUrl) {
-          throw new Error(`Failed to generate signed URL: ${signedErr?.message ?? 'No URL returned'}`);
+          const detail = signedErr?.message ?? 'No URL returned';
+          throw new Error(
+            detail.includes('not found') || detail.includes('404')
+              ? `The uploaded video could not be found in storage (path: ${storagePath}). Please go back and re-upload your file.`
+              : `Failed to generate signed URL: ${detail}`
+          );
         }
 
         const videoUrl = signedData.signedUrl;
@@ -951,7 +994,10 @@ export function useAppState() {
           `Job finished — ${clips.length} clips from transcript`);
 
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        const msg = rawMsg.includes('Failed to fetch') || rawMsg.includes('NetworkError')
+          ? 'Could not reach the AI processing service. Please check your connection and try again.'
+          : rawMsg;
         console.error('[pipeline] FAILED:', msg);
         await updateJobStatus(jobId, 'failed', undefined, { error_message: msg });
         await insertLog(userId, 'job_failed', 'error', msg).catch(() => {});

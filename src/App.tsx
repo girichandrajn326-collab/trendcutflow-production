@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAppState } from './store/appStore';
 import { useAuth } from './context/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import UpgradeModal from './components/UpgradeModal';
@@ -104,79 +105,81 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-white font-sans flex flex-col">
-      <Header
-        state={state}
-        onOpenUpgradeModal={app.openUpgradeModal}
-        onToggleAccountDropdown={app.toggleAccountDropdown}
-        onCloseAccountDropdown={app.closeAccountDropdown}
-        onNavigateHome={() => app.setScreen('intake')}
-        onNavigateHistory={() => app.setScreen('history')}
-        onLogout={auth.logout}
-        onOpenProfile={() => { app.closeAccountDropdown(); setShowProfile(true); }}
-        onOpenPreferences={() => { app.closeAccountDropdown(); setShowPreferences(true); }}
-      />
-      <div className="flex-1">
-        {state.screen === 'intake' && (
-          <IntakeScreen
-            state={state}
-            onGenerate={app.runPipeline}
-            onSetUrl={app.setInputUrl}
-            onSetDragging={app.setIsDragging}
-            onSetFile={app.setUploadedFile}
-            onOpenUpgrade={app.openUpgradeModal}
+    <ErrorBoundary>
+      <div className="min-h-screen bg-[#0B0F17] text-white font-sans flex flex-col">
+        <Header
+          state={state}
+          onOpenUpgradeModal={app.openUpgradeModal}
+          onToggleAccountDropdown={app.toggleAccountDropdown}
+          onCloseAccountDropdown={app.closeAccountDropdown}
+          onNavigateHome={() => app.setScreen('intake')}
+          onNavigateHistory={() => app.setScreen('history')}
+          onLogout={auth.logout}
+          onOpenProfile={() => { app.closeAccountDropdown(); setShowProfile(true); }}
+          onOpenPreferences={() => { app.closeAccountDropdown(); setShowPreferences(true); }}
+        />
+        <div className="flex-1">
+          {state.screen === 'intake' && (
+            <IntakeScreen
+              state={state}
+              onGenerate={app.runPipeline}
+              onSetUrl={app.setInputUrl}
+              onSetDragging={app.setIsDragging}
+              onSetFile={app.setUploadedFile}
+              onOpenUpgrade={app.openUpgradeModal}
+            />
+          )}
+          {state.screen === 'processing' && (
+            <ProcessingScreen
+              pipeline={state.pipeline}
+              pipelineError={state.pipelineError}
+              onGoBack={() => app.setScreen('intake')}
+              onViewClips={() => app.setScreen('editor')}
+            />
+          )}
+          {state.screen === 'history' && (
+            <HistoryScreen user={state.user} />
+          )}
+          {state.screen === 'editor' && (
+            <EditorScreen
+              state={state}
+              onSetClip={app.setActiveClipIndex}
+              onSetPreset={app.setSubtitlePreset}
+              onSetActiveWord={app.setActiveWordIndex}
+              onAddToQueue={app.addToPublishQueue}
+              onRemoveFromQueue={app.removeFromPublishQueue}
+              onUpdateTitle={app.updateMetadataTitle}
+            />
+          )}
+        </div>
+        <Footer onNavigate={openLegal} />
+        {state.isUpgradeModalOpen && (
+          <UpgradeModal
+            currentPlan={state.user.plan}
+            onClose={app.closeUpgradeModal}
+            onSelectPlan={app.selectPlan}
+            onPurchasePlan={async (plan) => {
+              app.purchasePlan(plan);
+              app.setAuthUser(auth.user);
+            }}
+            userId={state.user.id}
           />
         )}
-        {state.screen === 'processing' && (
-          <ProcessingScreen
-            pipeline={state.pipeline}
-            pipelineError={state.pipelineError}
-            onGoBack={() => app.setScreen('intake')}
-            onViewClips={() => app.setScreen('editor')}
+        <ToastStack toasts={state.toasts} onDismiss={app.dismissToast} />
+        {showProfile && (
+          <ProfileSettingsModal
+            user={state.user}
+            onClose={() => setShowProfile(false)}
+            onSaved={(name) => {
+              app.addToast({ type: 'success', title: 'Profile updated', message: `Display name saved as "${name}".` });
+              setShowProfile(false);
+            }}
           />
         )}
-        {state.screen === 'history' && (
-          <HistoryScreen user={state.user} />
-        )}
-        {state.screen === 'editor' && (
-          <EditorScreen
-            state={state}
-            onSetClip={app.setActiveClipIndex}
-            onSetPreset={app.setSubtitlePreset}
-            onSetActiveWord={app.setActiveWordIndex}
-            onAddToQueue={app.addToPublishQueue}
-            onRemoveFromQueue={app.removeFromPublishQueue}
-            onUpdateTitle={app.updateMetadataTitle}
-          />
+        {showPreferences && (
+          <PreferencesModal onClose={() => setShowPreferences(false)} />
         )}
       </div>
-      <Footer onNavigate={openLegal} />
-      {state.isUpgradeModalOpen && (
-        <UpgradeModal
-          currentPlan={state.user.plan}
-          onClose={app.closeUpgradeModal}
-          onSelectPlan={app.selectPlan}
-          onPurchasePlan={async (plan) => {
-            app.purchasePlan(plan);
-            app.setAuthUser(auth.user);
-          }}
-          userId={state.user.id}
-        />
-      )}
-      <ToastStack toasts={state.toasts} onDismiss={app.dismissToast} />
-      {showProfile && (
-        <ProfileSettingsModal
-          user={state.user}
-          onClose={() => setShowProfile(false)}
-          onSaved={(name) => {
-            app.addToast({ type: 'success', title: 'Profile updated', message: `Display name saved as "${name}".` });
-            setShowProfile(false);
-          }}
-        />
-      )}
-      {showPreferences && (
-        <PreferencesModal onClose={() => setShowPreferences(false)} />
-      )}
-    </div>
+    </ErrorBoundary>
   );
 }

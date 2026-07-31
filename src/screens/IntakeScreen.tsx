@@ -193,7 +193,7 @@ export default function IntakeScreen({
                 {urlSource === 'youtube' ? 'YouTube' : 'Instagram'} URL detected — server-side download ready
               </p>
               <p className="text-sky-400/70 text-[11px] mt-0.5 leading-snug">
-                Click "Generate Viral Shorts" to start. The video will be downloaded securely on our servers, then processed through the AI pipeline.
+                Click "Generate Viral Shorts" to start. The video will be downloaded securely via our server-side handler, then processed through the AI pipeline.
               </p>
             </div>
           </div>
