@@ -156,7 +156,9 @@ export async function trimVideoClip(
       const fileBytes = new Uint8Array(await videoFile.arrayBuffer());
       await ffmpeg.writeFile(inputName, fileBytes);
 
-      // 9:16 vertical crop: scale to height 1920, crop width to 1080
+      // 9:16 vertical crop: scale to height 1920, crop width to 1080.
+      // Use center-crop by default — the canvas renderer handles subject
+      // tracking when available (COEP-enabled environments).
       const exitCode = await ffmpeg.exec([
         '-ss', String(startTime),
         '-to', String(endTime),

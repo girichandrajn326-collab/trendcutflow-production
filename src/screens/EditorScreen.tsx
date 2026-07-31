@@ -4,10 +4,11 @@ import {
   CheckCheck, CalendarClock, Plus, Trash2, Tag,
   FileText, Hash, Wand2, LayoutGrid, Pencil, Check,
   Youtube, Instagram, Ghost, ChevronUp, CheckCircle2,
-  Download, Loader2,
+  Download, Loader2, Sparkles, ScanFace,
 } from 'lucide-react';
 import type { AppState, SubtitlePreset, TranscriptWord, QueueEntry, QueuePlatform, QueueInterval } from '../store/appStore';
 import type { CSSProperties } from 'react';
+import { renderClipWithSubtitles } from '../lib/canvasRenderer';
 
 function getStyleSeedVariation(seed: number): CSSProperties {
   return {
@@ -27,6 +28,8 @@ interface EditorScreenProps {
   onAddToQueue: (entry: QueueEntry) => void;
   onRemoveFromQueue: (clipId: string) => void;
   onUpdateTitle: (clipId: string, i: number, val: string) => void;
+  onSetEnableIntroTransition: (enabled: boolean) => void;
+  onSetEnableSubjectTracking: (enabled: boolean) => void;
 }
 
 const PRESET_LABELS: Record<SubtitlePreset, string> = {
@@ -50,8 +53,10 @@ export default function EditorScreen({
   onAddToQueue,
   onRemoveFromQueue,
   onUpdateTitle,
+  onSetEnableIntroTransition,
+  onSetEnableSubjectTracking,
 }: EditorScreenProps) {
-  const { activeClipIndex, clips, subtitlePreset, activeWordIndex, publishQueue, randomStyleSeed } = state;
+  const { activeClipIndex, clips, subtitlePreset, activeWordIndex, publishQueue, randomStyleSeed, enableIntroTransition, enableSubjectTracking } = state;
   const clip = clips[activeClipIndex];
 
   const [isPlaying, setIsPlaying]               = useState(false);
@@ -194,35 +199,30 @@ export default function EditorScreen({
 
   const handleExport = useCallback(async () => {
     if (!clip) return;
-    const sourceUrl = clip.sourceVideoUrl ?? (state.uploadedFile ? URL.createObjectURL(state.uploadedFile) : null);
-    if (!sourceUrl) {
-      alert('Original video is not available for export.');
+    const sourceFile = state.uploadedFile;
+    if (!sourceFile) {
+      alert('Original video file is needed for video export. Please re-upload the video to export with burned-in subtitles.');
       return;
     }
     setExporting(true);
     try {
-      const safeName = `${(clip?.title ?? 'clip').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.txt`;
-      // Download the clip metadata + transcript as a text file (no server-side rendering)
-      const lines = [
-        `Clip: ${clip.title}`,
-        `Time range: ${clip.startTime}s - ${clip.endTime}s`,
-        '',
-        'Viral Titles:',
-        ...(clip.metadata?.viralTitles ?? []).map((t, i) => `  ${i + 1}. ${t}`),
-        '',
-        'SEO Description:',
-        `  ${clip.metadata?.seoDescription ?? ''}`,
-        '',
-        'Hashtags:',
-        `  ${(clip.metadata?.hashtags ?? []).join(' ')}`,
-        '',
-        'Algorithmic Tags:',
-        `  ${(clip.metadata?.algorithmicTags ?? []).join(', ')}`,
-        '',
-        'Transcript:',
-        (clip.transcript ?? []).map(w => w.word).join(' '),
-      ];
-      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+      const blob = await renderClipWithSubtitles(sourceFile, {
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        words: (clip.transcript ?? []).map(w => ({ word: w.word, startMs: w.startMs, endMs: w.endMs })),
+        style: subtitlePreset,
+        styleSeed: randomStyleSeed,
+        enableIntro: enableIntroTransition,
+        brandName: state.user.name || 'TrendCutFlow',
+        enableSubjectTracking: enableSubjectTracking,
+      });
+
+      if (!blob) {
+        alert('Video export is not supported in this browser. Try Chrome or Edge.');
+        return;
+      }
+
+      const safeName = `${(clip?.title ?? 'clip').replace(/[^a-z0-9]/gi, '_').toLowerCase()}.webm`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -235,7 +235,7 @@ export default function EditorScreen({
     } finally {
       setExporting(false);
     }
-  }, [clip, state.uploadedFile]);
+  }, [clip, state.uploadedFile, subtitlePreset, randomStyleSeed, enableIntroTransition, enableSubjectTracking, state.user.name]);
 
   // ── Scrub-drag: click or drag across transcript updates active word ─────────
   const handleTranscriptPointerDown = useCallback((e: React.PointerEvent) => {
@@ -496,6 +496,38 @@ export default function EditorScreen({
             <p className="text-[10px] text-slate-700 mt-2 text-center">
               Style seed {randomStyleSeed.toFixed(4)} · ±{((1 - randomStyleSeed) * 100).toFixed(1)}% variance per export
             </p>
+          </div>
+
+          {/* Export options toggles */}
+          <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-white/[0.06]">
+            <button
+              onClick={() => onSetEnableIntroTransition(!enableIntroTransition)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
+                enableIntroTransition
+                  ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
+                  : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:text-slate-300'
+              }`}
+            >
+              <Sparkles size={13} className={enableIntroTransition ? 'text-sky-400' : 'text-slate-600'} />
+              <span className="flex-1 text-left">Brand intro transition (0.5s)</span>
+              <span className={`w-8 h-4 rounded-full relative transition-colors ${enableIntroTransition ? 'bg-sky-500/40' : 'bg-white/10'}`}>
+                <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${enableIntroTransition ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </span>
+            </button>
+            <button
+              onClick={() => onSetEnableSubjectTracking(!enableSubjectTracking)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors ${
+                enableSubjectTracking
+                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                  : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:text-slate-300'
+              }`}
+            >
+              <ScanFace size={13} className={enableSubjectTracking ? 'text-cyan-400' : 'text-slate-600'} />
+              <span className="flex-1 text-left">Smart subject tracking (16:9 → 9:16)</span>
+              <span className={`w-8 h-4 rounded-full relative transition-colors ${enableSubjectTracking ? 'bg-cyan-500/40' : 'bg-white/10'}`}>
+                <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${enableSubjectTracking ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </span>
+            </button>
           </div>
         </div>
 

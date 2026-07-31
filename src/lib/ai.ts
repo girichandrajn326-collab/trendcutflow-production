@@ -140,10 +140,22 @@ export async function findViralClips(transcriptText: string, videoDurationSecs?:
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openAIKey}` },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        temperature: 0.7,
+        temperature: 0.85,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'You are an elite viral video producer.' },
+          {
+            role: 'system',
+            content: `You are an elite viral short-form video producer who writes for YouTube Shorts, TikTok, and Instagram Reels.
+
+CRITICAL: YouTube's Reused Content and Inauthentic Content policies penalize channels that post generic, templated, or repetitive metadata. Every clip you produce MUST have genuinely unique, hook-driven metadata — never reuse the same title pattern across clips, never output filename-style titles like "Clip 1" or "Part 2", and never produce clickbait that doesn't reflect the actual content.
+
+Your titles must:
+- Each use a DIFFERENT hook angle (curiosity gap, contrarian take, numbered insight, emotional stakes, transformation, behind-the-scenes, etc.)
+- Be specific to what is actually said in that segment of the transcript
+- Read like a human creator wrote them, not like an AI template
+- Avoid repetitive phrasing across the 3 titles for a single clip (no "The Truth About X", "The Truth About Y", "The Truth About Z")
+- Be 40–70 characters long (optimal for Shorts titles)`,
+          },
           {
             role: 'user',
             content: `Analyze this transcript and extract EXACTLY 5 highly engaging segments for viral short-form content.
@@ -151,10 +163,16 @@ export async function findViralClips(transcriptText: string, videoDurationSecs?:
 For each segment provide:
 - startTime: start timestamp in seconds (float)
 - endTime: end timestamp in seconds (float, max 90s per clip)
-- viralTitles: array of exactly 3 attention-grabbing titles
-- seoDescription: 2-3 sentence SEO-optimized description
-- hashtags: array of 6-8 hashtags with # symbol
-- algorithmicTags: array of 5-6 keyword phrases (no # symbol)
+- viralTitles: array of exactly 3 titles, each using a DIFFERENT hook angle. Do NOT repeat title patterns across clips — each of the 15 total titles must feel like it was written by a different creator.
+- seoDescription: 2-3 sentence description that references the SPECIFIC topic discussed in this segment (not generic video marketing copy). Must be unique per clip.
+- hashtags: array of 6-8 hashtags with # symbol, mixing broad and niche tags relevant to THIS segment's topic
+- algorithmicTags: array of 5-6 keyword phrases (no # symbol) specific to this segment
+
+AVOID these repetitive patterns that trigger spam filters:
+- Starting multiple titles with "How to", "Why", or "The"
+- Using the same emoji set across titles
+- Generic phrases like "Must watch", "You won't believe", "Shocking truth"
+- Titles that could apply to ANY video (e.g., "This Changed Everything")
 
 Respond with valid JSON only: { "clips": [ ... ] }
 

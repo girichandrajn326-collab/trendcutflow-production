@@ -126,6 +126,8 @@ export interface AppState {
   isDragging: boolean;
   uploadedFile: File | null;
   randomStyleSeed: number;
+  enableIntroTransition: boolean;
+  enableSubjectTracking: boolean;
   pipeline: PipelineStep[];
   pipelineError: string | null;
   toasts: Toast[];
@@ -392,6 +394,8 @@ export function useAppState() {
     isDragging: false,
     uploadedFile: null,
     randomStyleSeed: generateRandomStyleSeed(),
+    enableIntroTransition: true,
+    enableSubjectTracking: true,
     pipeline: INITIAL_PIPELINE.map(s => ({ ...s })),
     pipelineError: null,
     toasts: [],
@@ -520,6 +524,14 @@ export function useAppState() {
 
   const setSubtitlePreset = useCallback((preset: SubtitlePreset) => {
     setState(s => ({ ...s, subtitlePreset: preset }));
+  }, []);
+
+  const setEnableIntroTransition = useCallback((enabled: boolean) => {
+    setState(s => ({ ...s, enableIntroTransition: enabled }));
+  }, []);
+
+  const setEnableSubjectTracking = useCallback((enabled: boolean) => {
+    setState(s => ({ ...s, enableSubjectTracking: enabled }));
   }, []);
 
   const setActiveWordIndex = useCallback((i: number) => {
@@ -1102,6 +1114,8 @@ export function useAppState() {
     setScreen,
     setActiveClipIndex,
     setSubtitlePreset,
+    setEnableIntroTransition,
+    setEnableSubjectTracking,
     setActiveWordIndex,
     updateMetadataTitle,
     setInputUrl,

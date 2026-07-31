@@ -166,6 +166,8 @@ export default function App() {
               onAddToQueue={app.addToPublishQueue}
               onRemoveFromQueue={app.removeFromPublishQueue}
               onUpdateTitle={app.updateMetadataTitle}
+              onSetEnableIntroTransition={app.setEnableIntroTransition}
+              onSetEnableSubjectTracking={app.setEnableSubjectTracking}
             />
           )}
         </div>
