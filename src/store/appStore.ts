@@ -177,18 +177,24 @@ function formatDuration(start: number, end: number): string {
 // ─── Storage verification ────────────────────────────────────────────────────
 
 const STORAGE_BUCKET = 'videos';
-const VERIFY_RETRIES = 5;
-const VERIFY_DELAY_MS = 1000;
+const VERIFY_RETRIES = 10;
+const VERIFY_DELAY_MS = 2000;
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-async function verifyUpload(path: string): Promise<boolean> {
+async function verifyUpload(
+  path: string,
+  onPoll?: (attempt: number, total: number) => void,
+): Promise<boolean> {
+  const folder = path.slice(0, path.lastIndexOf('/'));
+  const file = path.slice(path.lastIndexOf('/') + 1);
   for (let attempt = 1; attempt <= VERIFY_RETRIES; attempt++) {
+    onPoll?.(attempt, VERIFY_RETRIES);
     const { data, error } = await supabase.storage
       .from(STORAGE_BUCKET)
-      .list(path.slice(0, path.lastIndexOf('/')), { search: path.slice(path.lastIndexOf('/') + 1) });
+      .list(folder, { search: file });
 
-    if (!error && data && data.some(f => f.name === path.slice(path.lastIndexOf('/') + 1))) {
+    if (!error && data && data.some(f => f.name === file)) {
       return true;
     }
     if (attempt < VERIFY_RETRIES) await sleep(VERIFY_DELAY_MS);
@@ -726,11 +732,18 @@ export function useAppState() {
 
         setState(s => ({
           ...s,
-          pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Verifying upload…'),
+          pipeline: setStepStatus(s.pipeline, 'download', 'active',
+            'Processing upload, please wait... Uploading and verifying file...'),
         }));
-        const verified = await verifyUpload(storagePath);
+        const verified = await verifyUpload(storagePath, (attempt, total) => {
+          setState(s => ({
+            ...s,
+            pipeline: setStepStatus(s.pipeline, 'download', 'active',
+              `Processing upload, please wait... Verifying file (attempt ${attempt} of ${total})...`),
+          }));
+        });
         if (!verified) {
-          throw new Error('Processing upload, please wait… — The file is still being registered in storage. Please try again in a moment.');
+          throw new Error('Processing upload, please wait... The file is still being registered in storage. Please try again in a moment.');
         }
       } else {
         sourceUrl = source;
@@ -797,11 +810,18 @@ export function useAppState() {
 
         setState(s => ({
           ...s,
-          pipeline: setStepStatus(s.pipeline, 'download', 'active', 'Verifying upload…'),
+          pipeline: setStepStatus(s.pipeline, 'download', 'active',
+            'Processing upload, please wait... Uploading and verifying file...'),
         }));
-        const verified = await verifyUpload(storagePath);
+        const verified = await verifyUpload(storagePath, (attempt, total) => {
+          setState(s => ({
+            ...s,
+            pipeline: setStepStatus(s.pipeline, 'download', 'active',
+              `Processing upload, please wait... Verifying file (attempt ${attempt} of ${total})...`),
+          }));
+        });
         if (!verified) {
-          throw new Error('Processing upload, please wait… — The file is still being registered in storage. Please try again in a moment.');
+          throw new Error('Processing upload, please wait... The file is still being registered in storage. Please try again in a moment.');
         }
       }
 
