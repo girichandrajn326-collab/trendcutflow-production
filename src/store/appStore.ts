@@ -805,7 +805,7 @@ export function useAppState() {
     // ── Run the pipeline client-side ──────────────────────────────────────────
     (async () => {
       try {
-        // Step 1: Build the public URL for the uploaded video
+        // Step 1: Resolve the public URL from the upload response
         await updateJobStatus(jobId, 'generating_url', 'Preparing video for processing…');
         await insertLog(userId, 'generate_signed_url', 'pending', 'Resolving public URL for storage path');
 
@@ -823,29 +823,16 @@ export function useAppState() {
         }
         await insertLog(userId, 'generate_signed_url', 'success', 'Public URL resolved');
 
-        // Step 2: Download video bytes
-        await updateJobStatus(jobId, 'downloading', 'Downloading video file…');
-        await insertLog(userId, 'download_video', 'pending', 'Downloading video from storage');
-
-        const dlRes = await fetch(videoUrl);
-        if (!dlRes.ok) throw new Error(`Download failed: HTTP ${dlRes.status}`);
-        const videoArrayBuffer = await dlRes.arrayBuffer();
-        const videoBytes = new Uint8Array(videoArrayBuffer);
-
-        await insertLog(userId, 'download_video', 'success',
-          `Downloaded ${Math.round(videoBytes.length / 1024 / 1024)} MB`);
-
-        // Step 3: Transcribe with Groq Whisper
+        // Step 2: Transcribe with Groq Whisper — pass the public URL directly
+        // (transcribeVideo fetches the bytes internally; no separate download step needed)
         setState(s => ({
           ...s,
           pipeline: setStepStatus(s.pipeline, 'transcribe', 'active', 'Transcribing audio with Groq Whisper…'),
         }));
         await updateJobStatus(jobId, 'transcribing', 'Transcribing audio with Groq Whisper…');
-        await insertLog(userId, 'transcribe', 'pending', `Sending ${Math.round(videoBytes.length / 1024 / 1024)} MB to Groq Whisper`);
+        await insertLog(userId, 'transcribe', 'pending', 'Sending video to Groq Whisper');
 
-        const videoBlob = new Blob([videoBytes], { type: 'video/mp4' });
-        const videoFile = new File([videoBlob], fileName, { type: 'video/mp4' });
-        const { text: transcriptText, words } = await transcribeVideo(videoFile);
+        const { text: transcriptText, words } = await transcribeVideo(videoUrl);
 
         await insertLog(userId, 'transcribe', 'success',
           `Transcribed ${transcriptText.split(/\s+/).filter(Boolean).length} words`);
@@ -918,7 +905,7 @@ export function useAppState() {
                   hashtags: c.hashtags,
                   algorithmicTags: c.algorithmicTags,
                 },
-                source_video_url: sourceUrl ?? '',
+                source_video_url: videoUrl,
                 transcript_json: { words: c.transcriptWords },
               })),
             );
@@ -937,7 +924,7 @@ export function useAppState() {
             hasAudio: true,
             videoDurationSecs: 0,
             sourceTitle: sourceUrl ?? fileName,
-            sourceVideoUrl: sourceUrl ?? '',
+            sourceVideoUrl: videoUrl,
             clips,
             transcriptPreview: transcriptText.slice(0, 500),
           },
