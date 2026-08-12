@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoStatus } from '../types/database';
 import type { AuthUser } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
-import { transcribeVideo, findViralClips } from '../lib/ai';
+import { transcribeVideo, findViralClips, validateApiKeys } from '../lib/ai';
 
 export type AppScreen = 'intake' | 'processing' | 'editor' | 'history';
 export type SubtitlePreset = 'hormozi' | 'minimalist' | 'cyberpunk';
@@ -681,6 +681,8 @@ export function useAppState() {
     let fileName: string;
 
     try {
+      validateApiKeys();
+
       if (source instanceof File) {
         if (source.size > 500 * 1024 * 1024) {
           throw new Error('File too large (max 500 MB). Please compress the video or paste a YouTube URL instead.');

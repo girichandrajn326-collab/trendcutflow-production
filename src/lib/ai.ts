@@ -33,16 +33,27 @@ const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const GROQ_TIMEOUT_MS = 300_000;
 const OPENAI_TIMEOUT_MS = 120_000;
 
+const GROQ_KEY_MISSING_MSG =
+  'Groq API key is missing. Open your Bolt project settings (Environment tab) and add VITE_GROQ_API_KEY, then redeploy.';
+const OPENAI_KEY_MISSING_MSG =
+  'OpenAI API key is missing. Open your Bolt project settings (Environment tab) and add VITE_OPENAI_API_KEY, then redeploy.';
+
 function getGroqKey(): string {
   const key = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
-  if (!key) throw new Error('Groq API key is not configured. Add VITE_GROQ_API_KEY to your environment.');
+  if (!key || key.trim() === '') throw new Error(GROQ_KEY_MISSING_MSG);
   return key;
 }
 
 function getOpenAIKey(): string {
   const key = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
-  if (!key) throw new Error('OpenAI API key is not configured. Add VITE_OPENAI_API_KEY to your environment.');
+  if (!key || key.trim() === '') throw new Error(OPENAI_KEY_MISSING_MSG);
   return key;
+}
+
+/** Pre-flight check — call before starting the pipeline so key errors surface immediately. */
+export function validateApiKeys(): void {
+  getGroqKey();
+  getOpenAIKey();
 }
 
 // ─── Step 0: Pre-flight audio check ──────────────────────────────────────────
