@@ -5,7 +5,6 @@ import { useDocumentHead, SEO, type HeadMeta } from './lib/seo';
 import ErrorBoundary from './components/ErrorBoundary';
 import Header from './components/Header';
 import Footer from './components/Footer';
-import UpgradeModal from './components/UpgradeModal';
 import { ToastStack } from './components/Toast';
 import IntakeScreen from './screens/IntakeScreen';
 import ProcessingScreen from './screens/ProcessingScreen';
@@ -89,7 +88,6 @@ export default function App() {
           <div className="filter blur-md opacity-30 saturate-50">
             <Header
               state={state}
-              onOpenUpgradeModal={() => {}}
               onToggleAccountDropdown={() => {}}
               onCloseAccountDropdown={() => {}}
               onNavigateHome={() => {}}
@@ -126,7 +124,6 @@ export default function App() {
       <div className="min-h-screen bg-[#0B0F17] text-white font-sans flex flex-col">
         <Header
           state={state}
-          onOpenUpgradeModal={app.openUpgradeModal}
           onToggleAccountDropdown={app.toggleAccountDropdown}
           onCloseAccountDropdown={app.closeAccountDropdown}
           onNavigateHome={() => app.setScreen('intake')}
@@ -143,7 +140,6 @@ export default function App() {
               onSetUrl={app.setInputUrl}
               onSetDragging={app.setIsDragging}
               onSetFile={app.setUploadedFile}
-              onOpenUpgrade={app.openUpgradeModal}
             />
           )}
           {state.screen === 'processing' && (
@@ -172,18 +168,6 @@ export default function App() {
           )}
         </div>
         <Footer onNavigate={openLegal} />
-        {state.isUpgradeModalOpen && (
-          <UpgradeModal
-            currentPlan={state.user.plan}
-            onClose={app.closeUpgradeModal}
-            onSelectPlan={app.selectPlan}
-            onPurchasePlan={async (plan) => {
-              app.purchasePlan(plan);
-              app.setAuthUser(auth.user);
-            }}
-            userId={state.user.id}
-          />
-        )}
         <ToastStack toasts={state.toasts} onDismiss={app.dismissToast} />
         {showProfile && (
           <ProfileSettingsModal

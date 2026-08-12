@@ -1,10 +1,9 @@
 import { useRef, useEffect } from 'react';
-import { Zap, ChevronDown, User, LogOut, CreditCard, Settings, TrendingUp, Clock } from 'lucide-react';
+import { ChevronDown, User, LogOut, Settings, TrendingUp, Clock } from 'lucide-react';
 import type { AppState } from '../store/appStore';
 
 interface HeaderProps {
   state: AppState;
-  onOpenUpgradeModal: () => void;
   onToggleAccountDropdown: () => void;
   onCloseAccountDropdown: () => void;
   onNavigateHome: () => void;
@@ -16,7 +15,6 @@ interface HeaderProps {
 
 export default function Header({
   state,
-  onOpenUpgradeModal,
   onToggleAccountDropdown,
   onCloseAccountDropdown,
   onNavigateHome,
@@ -27,7 +25,6 @@ export default function Header({
 }: HeaderProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { user, isAccountDropdownOpen } = state;
-  const creditPct = ((user?.videosProcessed ?? 0) / Math.max(user?.totalCredits ?? 1, 1)) * 100;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -82,40 +79,6 @@ export default function Header({
             History
           </button>
 
-          {/* Real-time credit counter pill */}
-          {(() => {
-            const remaining = user?.credits ?? Math.max((user?.totalCredits ?? 0) - (user?.videosProcessed ?? 0), 0);
-            const isLow     = remaining <= 1;
-            const isEmpty   = remaining === 0;
-            return (
-              <button
-                onClick={onOpenUpgradeModal}
-                title={`${remaining} credit${remaining !== 1 ? 's' : ''} remaining`}
-                className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-300 ${
-                  isEmpty
-                    ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:border-red-500/60'
-                    : isLow
-                    ? 'bg-amber-500/10 border-amber-500/25 text-amber-400 hover:border-amber-500/50'
-                    : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:border-white/[0.15]'
-                }`}
-              >
-                <Zap size={11} className={isEmpty ? 'text-red-400' : isLow ? 'text-amber-400' : 'text-slate-500'} />
-                <span>{remaining}<span className="text-current/50">/{user?.totalCredits ?? 0}</span></span>
-              </button>
-            );
-          })()}
-
-          {/* Upgrade button */}
-          {user?.plan !== 'pro' && (
-            <button
-              onClick={onOpenUpgradeModal}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-sky-600/20 to-cyan-500/20 border border-sky-500/30 hover:border-sky-500/60 text-sky-300 hover:text-sky-200 text-xs font-semibold transition-all duration-200 hover:shadow-[0_0_12px_rgba(14,165,233,0.3)]"
-            >
-              <Zap size={12} />
-              Upgrade
-            </button>
-          )}
-
           {/* Account dropdown */}
           <div className="relative" ref={dropdownRef}>
             <button
@@ -153,52 +116,13 @@ export default function Header({
                     </div>
                   </div>
 
-                  {/* Credit usage */}
-                  <div className="mt-3">
-                    <div className="flex justify-between items-center mb-1.5">
-                      <span className="text-xs text-slate-400 font-medium">Processing Credits</span>
-                      <span className={`text-xs font-bold ${creditPct >= 100 ? 'text-red-400' : 'text-white'}`}>
-                        {user?.videosProcessed ?? 0} / {user?.totalCredits ?? 0} used
-                      </span>
-                    </div>
-                    <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.min(creditPct, 100)}%`,
-                          background: creditPct >= 100
-                            ? 'linear-gradient(90deg, #ef4444, #f87171)'
-                            : creditPct >= 70
-                            ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-                            : 'linear-gradient(90deg, #8B5CF6, #06B6D4)',
-                        }}
-                      />
-                    </div>
-                    {creditPct >= 100 && (
-                      <p className="text-red-400 text-[10px] mt-1.5">Credit limit reached. Upgrade to continue.</p>
-                    )}
-                  </div>
                 </div>
 
                 {/* Menu items */}
                 <div className="p-2">
                   <DropdownItem icon={<User size={14} />} label="Profile Settings" onClick={onOpenProfile} />
-                  <DropdownItem icon={<CreditCard size={14} />} label="Billing & Plans" onClick={onOpenUpgradeModal} />
                   <DropdownItem icon={<Settings size={14} />} label="Preferences" onClick={onOpenPreferences} />
                 </div>
-
-                {/* Upgrade CTA if not pro */}
-                {user?.plan !== 'pro' && (
-                  <div className="px-3 pb-3">
-                    <button
-                      onClick={onOpenUpgradeModal}
-                      className="w-full py-2 rounded-lg bg-gradient-to-r from-sky-600 to-cyan-500 text-white text-xs font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5 shadow-lg shadow-sky-900/30"
-                    >
-                      <Zap size={12} />
-                      Upgrade Plan
-                    </button>
-                  </div>
-                )}
 
                 <div className="border-t border-white/[0.06] p-2">
                   <DropdownItem icon={<LogOut size={14} />} label="Sign Out" danger onClick={onLogout} />

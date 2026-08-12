@@ -119,7 +119,6 @@ export interface AppState {
   clips: Clip[];
   subtitlePreset: SubtitlePreset;
   activeWordIndex: number;
-  isUpgradeModalOpen: boolean;
   isAccountDropdownOpen: boolean;
   publishQueue: QueueEntry[];
   inputUrl: string;
@@ -161,12 +160,6 @@ export const PLANS: PlanOption[] = [
     features: ['5 videos/month', '5 viral shorts per video', 'Priority processing', 'Custom subtitle styles', 'Advanced scheduling', 'Analytics dashboard', 'API access'],
   },
 ];
-
-export const PLAN_LIMITS: Record<PlanTier, number> = {
-  free: 1,
-  creator: 3,
-  pro: 5,
-};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -387,7 +380,6 @@ export function useAppState() {
     clips: [],
     subtitlePreset: 'hormozi',
     activeWordIndex: 0,
-    isUpgradeModalOpen: false,
     isAccountDropdownOpen: false,
     publishQueue: [] as QueueEntry[],
     inputUrl: '',
@@ -422,7 +414,6 @@ export function useAppState() {
         pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
         pipelineError: null,
         toasts: [],
-        isUpgradeModalOpen: false,
         isAccountDropdownOpen: false,
       }),
     }));
@@ -563,37 +554,6 @@ export function useAppState() {
     setState(s => ({ ...s, uploadedFile: file, inputUrl: '' }));
   }, []);
 
-  // ── Upgrade modal ──────────────────────────────────────────────────────────
-
-  const openUpgradeModal = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: true })), []);
-  const closeUpgradeModal = useCallback(() => setState(s => ({ ...s, isUpgradeModalOpen: false })), []);
-
-  const selectPlan = useCallback((plan: PlanTier) => {
-    setState(s => ({ ...s, user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] } }));
-  }, []);
-
-  const purchasePlan = useCallback((plan: PlanTier) => {
-    setState(s => ({
-      ...s,
-      user: { ...s.user, plan, totalCredits: PLAN_LIMITS[plan] },
-      isUpgradeModalOpen: false,
-    }));
-    setState(s => {
-      if (s.user.id) {
-        const planDbMap: Record<PlanTier, string> = { free: 'FREE', creator: 'CREATOR', pro: 'PRO' };
-        supabase.from('users').update({
-          current_plan: planDbMap[plan] as 'FREE' | 'CREATOR' | 'PRO',
-          total_credits: PLAN_LIMITS[plan],
-          credits_used: 0,
-          credits: PLAN_LIMITS[plan],
-        }).eq('id', s.user.id).then(({ error }) => {
-          if (error) console.error('purchasePlan DB write failed:', error.message);
-        });
-      }
-      return s;
-    });
-  }, []);
-
   // ── Account dropdown ───────────────────────────────────────────────────────
 
   const toggleAccountDropdown = useCallback(() => {
@@ -685,10 +645,6 @@ export function useAppState() {
   const runPipeline = useCallback(async () => {
     const source = state.uploadedFile ?? state.inputUrl;
     if (!source) return;
-    if (state.user.credits <= 0) {
-      setState(s => ({ ...s, isUpgradeModalOpen: true }));
-      return;
-    }
 
     setState(s => ({
       ...s,
@@ -710,19 +666,6 @@ export function useAppState() {
         ...s,
         pipelineError: 'Not authenticated. Please sign in again.',
         pipeline: setStepStatus(s.pipeline, 'download', 'error'),
-      }));
-      return;
-    }
-
-    // ── Credit pre-check ──────────────────────────────────────────────────────
-    const { data: canProcess } = await supabase.rpc('can_process_video', { uid: userId });
-    if (!canProcess) {
-      setState(s => ({
-        ...s,
-        screen: 'intake',
-        pipeline: INITIAL_PIPELINE.map(p => ({ ...p })),
-        pipelineError: null,
-        isUpgradeModalOpen: true,
       }));
       return;
     }
@@ -1080,7 +1023,6 @@ export function useAppState() {
             user: {
               ...s.user,
               videosProcessed: s.user.videosProcessed + 1,
-              credits: Math.max(s.user.credits - 1, 0),
             },
           }));
 
@@ -1121,10 +1063,6 @@ export function useAppState() {
     setInputUrl,
     setIsDragging,
     setUploadedFile,
-    openUpgradeModal,
-    closeUpgradeModal,
-    selectPlan,
-    purchasePlan,
     toggleAccountDropdown,
     closeAccountDropdown,
     addToPublishQueue,
