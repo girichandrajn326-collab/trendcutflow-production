@@ -174,33 +174,9 @@ function formatDuration(start: number, end: number): string {
   return `${m}:${s}`;
 }
 
-// ─── Storage verification ────────────────────────────────────────────────────
+// ─── Storage constants ─────────────────────────────────────────────────────
 
 const STORAGE_BUCKET = 'videos';
-const VERIFY_RETRIES = 10;
-const VERIFY_DELAY_MS = 2000;
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
-
-async function verifyUpload(
-  path: string,
-  onPoll?: (attempt: number, total: number) => void,
-): Promise<boolean> {
-  const folder = path.slice(0, path.lastIndexOf('/'));
-  const file = path.slice(path.lastIndexOf('/') + 1);
-  for (let attempt = 1; attempt <= VERIFY_RETRIES; attempt++) {
-    onPoll?.(attempt, VERIFY_RETRIES);
-    const { data, error } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .list(folder, { search: file });
-
-    if (!error && data && data.some(f => f.name === file)) {
-      return true;
-    }
-    if (attempt < VERIFY_RETRIES) await sleep(VERIFY_DELAY_MS);
-  }
-  return false;
-}
 
 // ─── Job-status → pipeline mapping ───────────────────────────────────────────
 
@@ -726,25 +702,8 @@ export function useAppState() {
           .upload(uploadPath, source, { contentType: source.type || 'video/mp4' });
 
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
-        // Use the exact path returned by Supabase Storage — never reconstruct it
         storagePath = uploadData?.path ?? uploadPath;
         if (!storagePath) throw new Error('Upload succeeded but no storage path was returned. Please try again.');
-
-        setState(s => ({
-          ...s,
-          pipeline: setStepStatus(s.pipeline, 'download', 'active',
-            'Processing upload, please wait... Uploading and verifying file...'),
-        }));
-        const verified = await verifyUpload(storagePath, (attempt, total) => {
-          setState(s => ({
-            ...s,
-            pipeline: setStepStatus(s.pipeline, 'download', 'active',
-              `Processing upload, please wait... Verifying file (attempt ${attempt} of ${total})...`),
-          }));
-        });
-        if (!verified) {
-          throw new Error('Processing upload, please wait... The file is still being registered in storage. Please try again in a moment.');
-        }
       } else {
         sourceUrl = source;
         sourceType = 'url';
@@ -807,22 +766,6 @@ export function useAppState() {
         if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
         storagePath = uploadData?.path ?? uploadPath;
         if (!storagePath) throw new Error('Upload succeeded but no storage path was returned. Please try again.');
-
-        setState(s => ({
-          ...s,
-          pipeline: setStepStatus(s.pipeline, 'download', 'active',
-            'Processing upload, please wait... Uploading and verifying file...'),
-        }));
-        const verified = await verifyUpload(storagePath, (attempt, total) => {
-          setState(s => ({
-            ...s,
-            pipeline: setStepStatus(s.pipeline, 'download', 'active',
-              `Processing upload, please wait... Verifying file (attempt ${attempt} of ${total})...`),
-          }));
-        });
-        if (!verified) {
-          throw new Error('Processing upload, please wait... The file is still being registered in storage. Please try again in a moment.');
-        }
       }
 
       // ── Insert processing_jobs row directly via supabase-js ──────────────────
@@ -862,29 +805,23 @@ export function useAppState() {
     // ── Run the pipeline client-side ──────────────────────────────────────────
     (async () => {
       try {
-        // Step 1: Generate signed URL to download the video from storage
+        // Step 1: Build the public URL for the uploaded video
         await updateJobStatus(jobId, 'generating_url', 'Preparing video for processing…');
-        await insertLog(userId, 'generate_signed_url', 'pending', 'Generating signed URL for storage path');
+        await insertLog(userId, 'generate_signed_url', 'pending', 'Resolving public URL for storage path');
 
         if (!storagePath || storagePath.trim() === '') {
           throw new Error('No storage path was saved for this upload. Please go back and try uploading the file again.');
         }
 
-        const { data: signedData, error: signedErr } = await supabase.storage
+        const { data: publicUrlData } = supabase.storage
           .from(STORAGE_BUCKET)
-          .createSignedUrl(storagePath, 600);
+          .getPublicUrl(storagePath);
 
-        if (signedErr || !signedData?.signedUrl) {
-          const detail = signedErr?.message ?? 'No URL returned';
-          throw new Error(
-            detail.includes('not found') || detail.includes('404')
-              ? 'Processing upload, please wait… — The uploaded video is still being registered in storage. Please go back and try again in a moment.'
-              : `Failed to generate signed URL: ${detail}`
-          );
+        const videoUrl = publicUrlData?.publicUrl;
+        if (!videoUrl) {
+          throw new Error('Could not resolve a URL for the uploaded video. Please try again.');
         }
-
-        const videoUrl = signedData.signedUrl;
-        await insertLog(userId, 'generate_signed_url', 'success', 'Signed URL generated');
+        await insertLog(userId, 'generate_signed_url', 'success', 'Public URL resolved');
 
         // Step 2: Download video bytes
         await updateJobStatus(jobId, 'downloading', 'Downloading video file…');
